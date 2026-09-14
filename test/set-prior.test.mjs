@@ -2,10 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 import { applyPrior, USAGE } from '../scripts/set-prior.mjs'
 import { ccdPaths } from '../lib/paths.mjs'
 import { loadLedger, scoreFor } from '../lib/ledger.mjs'
+
+const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const SCRIPT = join(PLUGIN_ROOT, 'scripts', 'set-prior.mjs')
 
 function fixture (name) {
   const root = mkdtempSync(join(tmpdir(), name))
@@ -78,6 +83,22 @@ test('an existing ledger is merged into, not overwritten', () => {
   const ledger = loadLedger(ccdPaths(root).ledger)
   assert.equal(scoreFor(ledger, 'src/a/**'), 3)
   assert.equal(scoreFor(ledger, 'src/b/**'), 7)
+})
+
+// --- N2: the documented command must actually run from an arbitrary cwd ---
+
+test('the script runs as a real child process from a non-plugin cwd and writes the ledger', () => {
+  const root = fixture('ccd-prior-cli-')
+
+  // SCRIPT is an absolute path, standing in for what the skill's
+  // ${CLAUDE_PLUGIN_ROOT} substitution resolves to. cwd is the target
+  // project, not the plugin directory -- the one cwd the orchestrator
+  // actually has when it runs this command for real.
+  const output = execFileSync(process.execPath, [SCRIPT, 'src/inject/**', '8'], { cwd: root }).toString()
+  assert.match(output, /Prior for src\/inject\/\*\* set to 8/)
+
+  const ledger = loadLedger(ccdPaths(root).ledger)
+  assert.equal(scoreFor(ledger, 'src/inject/**'), 8)
 })
 
 test('a ledger with a null areas is repaired rather than fatal', () => {

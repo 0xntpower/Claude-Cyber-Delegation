@@ -11,17 +11,22 @@ identity is otherwise only ever reported on failure, so this is the only
 success-path signal the orchestrator has.
 
 A handoff block is injected into your context automatically. It contains the
-previous agent's full transcript, the exact files it touched, and the git state
-scoped to those files. Read it before doing anything else.
+final portion of the previous agent's transcript (up to a configured byte cap,
+counted from the end), the exact files it touched, and the git state scoped to
+those files. Read it before doing anything else.
 
 ## How to resume
 
 1. Trust the file list. It was extracted from the previous agent's own
    transcript, so it names exactly what that agent changed and nothing another
    concurrently running agent changed.
-2. Check the scoped diff before re-implementing anything. Work already on disk
+2. Compare the run id in your dispatch prompt against the run id named in the
+   injected handoff header. If they differ, stop and report the mismatch
+   instead of proceeding — you were handed another run's work, and in a
+   shared working tree, continuing would edit the wrong files.
+3. Check the scoped diff before re-implementing anything. Work already on disk
    is real work. Resume from where it stops.
-3. Finish the task as specified. Do not re-scope it.
+4. Finish the task as specified. Do not re-scope it.
 
 ## Do not
 

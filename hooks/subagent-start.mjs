@@ -69,9 +69,15 @@ export function handleStart (input, deps = {}) {
   // dispatched this successor for. Falling back to the newest unclaimed baton
   // keeps the relay working when no pointer was written, which is the only
   // behaviour that existed before.
+  //
+  // The pointer is one-shot: it is cleared the instant it is read, before the
+  // claim is even attempted, whether or not that claim goes on to succeed. A
+  // pointer left in place until a successful claim survives every dry run
+  // that finds nothing to claim, and a later dispatch can then resurrect it
+  // and get mis-targeted at a run it was never written for.
   const pointer = readNextClaim(paths)
+  if (pointer !== null) clearNextClaim(paths)
   let claimed = pointer === null ? null : claimBatonById(paths, pointer)
-  if (claimed !== null) clearNextClaim(paths)
   if (claimed === null) claimed = claimNewestBaton(paths)
   if (claimed === null) return null
 

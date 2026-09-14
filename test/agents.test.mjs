@@ -38,6 +38,25 @@ for (const name of AGENTS) {
   })
 }
 
+// --- N4: the successor's own prompt must not claim to get the full transcript ---
+
+test('ccd-continuation does not claim to receive the full transcript', () => {
+  assert.doesNotMatch(frontmatter('ccd-continuation').body, /full transcript/i)
+})
+
+test('ccd-continuation says it receives a capped final portion instead', () => {
+  assert.match(frontmatter('ccd-continuation').body, /final portion/i)
+  assert.match(frontmatter('ccd-continuation').body, /byte cap/i)
+})
+
+// --- N3: the successor must be told to check it got the right run ---
+
+test('ccd-continuation is told to compare its run id against the injected header', () => {
+  const body = frontmatter('ccd-continuation').body
+  assert.match(body, /run id/i)
+  assert.match(body, /mismatch|differ/i)
+})
+
 test('ccd-reviewer has no write tools', () => {
   const tools = frontmatter('ccd-reviewer').fields.tools
   assert.doesNotMatch(tools, /\bEdit\b/)

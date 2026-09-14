@@ -150,6 +150,29 @@ test('a pointer naming an already-claimed run falls back to the newest', () => {
   assert.match(out.hookSpecificOutput.additionalContext, /src\/beta\/b\.c/)
 })
 
+// --- N1: the pointer must be one-shot, even across a dry run that claims nothing ---
+
+test('a pointer that survives a claimless dry run must not resurrect for a later dispatch', () => {
+  const root = fixture()
+  const paths = ccdPaths(root)
+
+  // The pointer is written for runA, but at this point runA has no baton yet
+  // (its continuation is effectively never dispatched with real data): the
+  // dry run below finds nothing to claim.
+  writeNextClaim(paths, 'runA')
+  const dryRun = handleStart({ agent_type: 'ccd-continuation', agent_id: 'ghost' }, { root, readTailFn: () => 'T' })
+  assert.equal(dryRun, null)
+
+  // runA's baton lands late, then runB is refused after it with no new pointer.
+  writeBaton(paths, 'runA', { ...BATON, runId: 'runA', files: ['src/alpha/a.c'] })
+  writeBaton(paths, 'runB', { ...BATON, runId: 'runB', files: ['src/beta/b.c'] })
+
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-B' }, { root, readTailFn: () => 'T' })
+  const ctx = out.hookSpecificOutput.additionalContext
+  assert.match(ctx, /src\/beta\/b\.c/)
+  assert.doesNotMatch(ctx, /src\/alpha\/a\.c/)
+})
+
 // --- M2: the injected block must not claim to be the whole transcript ---
 
 test('the transcript block is labelled as the final portion with its byte cap', () => {

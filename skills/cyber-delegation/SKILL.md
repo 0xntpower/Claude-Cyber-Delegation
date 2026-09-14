@@ -93,10 +93,13 @@ finished work it did not start.
 ## Recording a risk hint
 
 When the user says a component is likely to trigger guardrails, record it as a
-prior with the script. Area glob first, score from 1 to 10 second:
+prior with the script. Area glob first, score from 1 to 10 second. Use
+`${CLAUDE_PLUGIN_ROOT}` to find the script — a skill runs with the target
+project as cwd, not the plugin directory, so a bare `scripts/set-prior.mjs`
+path does not exist there:
 
 ```bash
-node scripts/set-prior.mjs 'src/inject/**' 8
+node "${CLAUDE_PLUGIN_ROOT}/scripts/set-prior.mjs" 'src/inject/**' 8
 ```
 
 **Do not hand-write `.ccd/risk-ledger.json`, and do not hand-merge into it.**

@@ -314,9 +314,10 @@ baton, it falls back to the newest unclaimed baton.
 
 Either way the payload is:
 
-- **Attempt 1**, the full dead transcript plus scoped git state. Re-injecting
-  the content that tripped Opus 4.8 is intentional. The successor is a different
-  model with different guardrails, and that is the entire premise.
+- **Attempt 1**, the final portion of the dead transcript (last N bytes, capped
+  by config) plus scoped git state. Re-injecting the content that tripped Opus
+  4.8 is intentional. The successor is a different model with different
+  guardrails, and that is the entire premise.
 - **Attempt 2**, a degraded payload consisting of the original spec, the scoped
   diff, and a progress note. No transcript.
 
@@ -344,7 +345,7 @@ the user never edits the file.
 
 ```
 Opus 5 subagent            -> refused
-  |- ccd-continuation      (4.6, full transcript)     attempt 1
+  |- ccd-continuation      (4.6, final-portion transcript) attempt 1
       |- ccd-continuation  (4.6, degraded payload)    attempt 2
           |- halt, write handoff report, notify user
 ```
