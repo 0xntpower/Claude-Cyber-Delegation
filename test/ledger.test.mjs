@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,7 +9,7 @@ import { promisify } from 'node:util'
 import { ccdPaths } from '../lib/paths.mjs'
 import {
   loadLedger, saveLedger, areaForPaths, setPrior,
-  recordOutcome, scoreFor, stalenessFor, withLedgerLock, EMPTY_LEDGER
+  recordOutcome, scoreFor, stalenessFor, withLedgerLock, EMPTY_LEDGER, blankArea
 } from '../lib/ledger.mjs'
 
 const CONFIG = { staleAfterDispatches: 10, staleAfterDays: 30 }
@@ -213,4 +213,104 @@ test('six concurrent locked updates all land', async () => {
   const led = loadLedger(paths.ledger)
   assert.equal(led.areas['a/**'].attempts, 6)
   assert.equal(led.areas['a/**'].kills, 6)
+})
+
+// --- P3: an unattributable kill must not vanish as if it never happened ---
+
+test('a null-area refusal increments unattributed.kills and leaves every area untouched', () => {
+  const led = structuredClone(EMPTY_LEDGER)
+  setPrior(led, 'a/**', 5, 'model')
+  recordOutcome(led, { area: null, outcome: 'refusal', model: 'claude-opus-4-8' })
+  assert.equal(led.unattributed.kills, 1)
+  assert.equal(led.unattributed.attempts, 1)
+  assert.equal(led.unattributed.successes, 0)
+  // The area that already existed must be completely unaffected.
+  assert.equal(led.areas['a/**'].score, 5)
+  assert.equal(led.areas['a/**'].attempts, 0)
+  assert.equal(led.areas['a/**'].kills, 0)
+})
+
+test('per-model tallies are kept for unattributed outcomes too', () => {
+  const led = structuredClone(EMPTY_LEDGER)
+  recordOutcome(led, { area: null, outcome: 'refusal', model: 'claude-opus-4-8' })
+  recordOutcome(led, { area: null, outcome: 'normal', model: 'claude-opus-5' })
+  recordOutcome(led, { area: undefined, outcome: 'refusal', model: 'claude-opus-4-8' })
+  assert.equal(led.unattributed.attempts, 3)
+  assert.equal(led.unattributed.kills, 2)
+  assert.equal(led.unattributed.successes, 1)
+  assert.equal(led.unattributed.byModel['claude-opus-4-8'].kills, 2)
+  assert.equal(led.unattributed.byModel['claude-opus-4-8'].attempts, 2)
+  assert.equal(led.unattributed.byModel['claude-opus-5'].successes, 1)
+})
+
+test('an old ledger without the unattributed field loads with an empty one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccd-old-led-'))
+  const f = join(dir, 'l.json')
+  writeFileSync(f, JSON.stringify({ version: 1, areas: {} }))
+  const led = loadLedger(f)
+  assert.deepEqual(led.unattributed, { attempts: 0, kills: 0, successes: 0, byModel: {} })
+})
+
+test('recordOutcome with a null area does not throw on a ledger missing unattributed', () => {
+  const led = { version: 1, areas: {} }
+  assert.doesNotThrow(() => {
+    recordOutcome(led, { area: null, outcome: 'refusal', model: 'claude-opus-4-8' })
+  })
+  assert.equal(led.unattributed.kills, 1)
+})
+
+// --- P4: a malformed ledger must not silently erase all accumulated evidence ---
+
+test('an unparseable ledger produces a timestamped backup and an empty ledger', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccd-corrupt-led-'))
+  const f = join(dir, 'l.json')
+  writeFileSync(f, 'not json at all')
+  const led = loadLedger(f)
+  assert.deepEqual(led, EMPTY_LEDGER)
+  const backups = readdirSync(dir).filter(n => /^risk-ledger\.corrupt-.*\.json$/.test(n))
+  assert.equal(backups.length, 1)
+})
+
+test('the backup file contains the original unreadable content', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccd-corrupt-led2-'))
+  const f = join(dir, 'l.json')
+  writeFileSync(f, 'not json at all')
+  loadLedger(f)
+  const backups = readdirSync(dir).filter(n => /^risk-ledger\.corrupt-.*\.json$/.test(n))
+  const contents = readFileSync(join(dir, backups[0]), 'utf8')
+  assert.equal(contents, 'not json at all')
+})
+
+test('a backup is not created when the file is fine', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccd-fine-led-'))
+  const f = join(dir, 'l.json')
+  const led = structuredClone(EMPTY_LEDGER)
+  setPrior(led, 'a/**', 6, 'model')
+  saveLedger(f, led)
+  loadLedger(f)
+  const backups = readdirSync(dir).filter(n => /^risk-ledger\.corrupt-.*\.json$/.test(n))
+  assert.equal(backups.length, 0)
+})
+
+test('a ledger with a mix of valid and garbage area entries retains only the valid ones', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccd-salvage-led-'))
+  const f = join(dir, 'l.json')
+  const good = blankArea()
+  good.score = 8
+  good.attempts = 3
+  writeFileSync(f, JSON.stringify({
+    version: 1,
+    areas: {
+      'good/**': good,
+      'garbage-string/**': 'not an object',
+      'garbage-shape/**': { foo: 1 },
+      'garbage-null/**': null
+    }
+  }))
+  const led = loadLedger(f)
+  assert.equal(led.areas['good/**'].score, 8)
+  assert.equal(led.areas['good/**'].attempts, 3)
+  assert.equal(led.areas['garbage-string/**'], undefined)
+  assert.equal(led.areas['garbage-shape/**'], undefined)
+  assert.equal(led.areas['garbage-null/**'], undefined)
 })

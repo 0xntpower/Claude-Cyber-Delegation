@@ -45,24 +45,41 @@ All confirmed against the Claude Code 2.1.270 binary on this machine.
 | Transcripts record every edited path | `"file_path"` on each Edit and Write, 436 occurrences in one sampled transcript |
 | Refusal is a distinguishable stop reason | `stop_reason == :refusal && message.stop_details` |
 | Runaway relaunch is a real hazard | binary warns to honor `stop_hook_active`, and `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` exists |
+| A bare frontmatter pin is honoured under a `[1m]` session, and the suffix propagates onto it | a project agent pinned to `model: claude-opus-4-6` with no suffix, dispatched from an `opus[1m]` session, reported itself back as `claude-opus-4-6[1m]` |
 
-### Unresolved, deferred to install-time probe
+### Settled by measurement: the `[1m]` question
 
 `[1m]` support is a runtime carrier check (*"doesn't have a 1M context window"*),
-not a static list, and the error is named `alias_1m_unsupported`, which suggests
-the suffix may be alias-level and may not compose with a full model ID. The
+not a static list, and the error is named `alias_1m_unsupported`, which suggested
+the suffix might be alias-level and might not compose with a full model ID. The
 installer probes `claude-opus-4-6[1m]` and falls back to plain
 `claude-opus-4-6` on rejection. It must never fail mid-refusal.
 
 **The probe records, it does not enable.** `oneMillionSuffix` in
 `.ccd/config.json` is an observation written for the operator, and no runtime
-code reads it. The model pin lives in agent frontmatter, which is static by
-necessity, so acting on a positive probe means editing `model:` in
-`agents/ccd-*.md` by hand. That edit is **unvalidated**: whether a full model ID
-composes with the suffix has never been confirmed on a live dispatch, and the
-`alias_1m_unsupported` name is evidence against it. Auto-rewriting three agent
-files with syntax nobody has seen accepted would risk breaking every agent the
-plugin ships, which is worse than leaving 1M context on the table.
+code reads it. That much is still true. What has changed is what the operator
+needs to do with it.
+
+A live probe dispatched a project agent whose frontmatter said exactly `model:
+claude-opus-4-6`, with no suffix, from a session configured as `opus[1m]`. The
+agent reported itself back as `claude-opus-4-6[1m]`. Two things are now
+verified rather than assumed:
+
+1. **The fully qualified frontmatter pin is honoured.** The agent came back as
+   4.6 while its parent session was opus-5, so it was not inheriting the
+   parent's model.
+2. **The `[1m]` modifier propagates from session configuration onto the pinned
+   model without appearing in frontmatter at all.**
+
+So no manual edit of `model:` in `agents/ccd-*.md` is needed to get 1M context,
+and writing `claude-opus-4-6[1m]` into an agent file remains both untested and
+unnecessary. The agents keep the bare ID.
+
+The honest caveat: a model self-reporting its own ID reads from its system
+prompt, not from the routing layer, so this is strong evidence rather than
+proof. It is strengthened by the fact that the reported ID differed from the
+parent session's model, which rules out the simplest alternative explanation
+(the agent just echoing whatever model it happens to be).
 
 ## Field intelligence
 

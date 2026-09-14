@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
 import { readTail } from '../lib/classify.mjs'
 import { claimBatonById, claimNewestBaton, clearNextClaim, readNextClaim, writeOrigin } from '../lib/baton.mjs'
+import { MAX_PATHSPEC } from '../lib/gitstate.mjs'
 
 const CONTINUATION = 'ccd-continuation'
 
@@ -35,6 +36,17 @@ function buildContext (baton, transcriptText, capBytes) {
     block('Git diffstat, scoped to those files', '```\n' + ((baton.state?.diffstat ?? '').length === 0 ? '(no diff)' : baton.state.diffstat) + '\n```')
   ].join('\n')
 
+  // The dead agent touched more files than the pathspec cap. Say so plainly:
+  // without this, the successor sees a partial file list and diff with no
+  // indication they are partial, and may conclude there is nothing left to do.
+  const truncationNote = baton.state?.truncated === true
+    ? block(
+      'Truncated file list',
+      `This agent touched more than ${MAX_PATHSPEC} files, the cap for git scoping. ` +
+        `The file list and diff above are incomplete: only the first ${MAX_PATHSPEC} touched paths were scoped.`
+    )
+    : ''
+
   if (baton.attempt >= 2) {
     const note = block(
       'Degraded payload',
@@ -44,14 +56,14 @@ function buildContext (baton, transcriptText, capBytes) {
         'file list, and the diff above. Re-derive only what you must.'
       ].join('\n')
     )
-    return header + work + note
+    return header + work + truncationNote + note
   }
 
   // The injected text is the tail, not the whole transcript, and saying so
   // matters: the successor must not conclude that an absent early step never
   // happened. The tail is the right end to keep, because the work-in-progress
   // and the refusal both live at the end.
-  return header + work + block(
+  return header + work + truncationNote + block(
     `Final portion of the refused agent's transcript (last ${capBytes} bytes; earlier turns are cut)`,
     '```\n' + transcriptText + '\n```'
   )

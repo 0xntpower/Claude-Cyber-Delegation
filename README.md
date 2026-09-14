@@ -26,11 +26,20 @@ tell, it records the safe default and says so.
 
 Recording is all it does. Nothing at runtime reads that value: the three agents
 carry a static `model: claude-opus-4-6` in their frontmatter, because frontmatter
-is the only place a full model ID can be pinned. Enabling 1M context therefore
-means editing `model:` in `agents/ccd-*.md` by hand, and **whether a full model
-ID composes with the `[1m]` suffix at all is unconfirmed** — the platform error
-is named `alias_1m_unsupported`, which hints the suffix may be alias-only. If you
-try it, change one agent, dispatch it, and confirm before changing the rest.
+is the only place a full model ID can be pinned.
+
+**This has now been measured, and no hand edit is needed.** A live probe
+dispatched a project agent whose frontmatter said exactly `model:
+claude-opus-4-6`, no suffix, from a session configured as `opus[1m]`, and the
+agent reported itself back as `claude-opus-4-6[1m]`. The full model ID is
+honoured as written, the agent did not inherit its parent session's model, and
+the `[1m]` modifier propagates from session configuration onto the pinned
+model without ever needing to appear in frontmatter. Writing
+`claude-opus-4-6[1m]` into an agent file remains both untested and
+unnecessary, and the agents keep the bare ID. The one honest caveat: a model
+reports its own ID from its system prompt, not from the routing layer, so this
+is strong evidence rather than proof, strengthened by the fact that the
+reported ID differed from the parent session's model.
 
 ## What it does
 

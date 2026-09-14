@@ -131,3 +131,41 @@ test('a corrupt next-claim pointer reads as absent', () => {
   writeFileSync(join(paths.base, 'next-claim'), '../../etc/passwd')
   assert.equal(readNextClaim(paths), null)
 })
+
+// --- P1: a corrupt baton must not brick its run, or orphan older ones ---
+
+test('a corrupt newest baton does not prevent an older valid baton from being claimed', () => {
+  const paths = fixture()
+  writeBaton(paths, 'old', { attempt: 1, marker: 'old' })
+  const oldFile = join(runDir(paths, 'old'), 'baton.json')
+  const past = new Date(Date.now() - 60000)
+  utimesSync(oldFile, past, past)
+  const newDir = runDir(paths, 'new')
+  mkdirSync(newDir, { recursive: true })
+  writeFileSync(join(newDir, 'baton.json'), 'not valid json')
+  const claimed = claimNewestBaton(paths)
+  assert.equal(claimed.runId, 'old')
+  assert.equal(claimed.baton.marker, 'old')
+})
+
+test('a corrupt baton is renamed to baton.corrupt.json', () => {
+  const paths = fixture()
+  const dir = runDir(paths, 'bad')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'baton.json'), 'not valid json')
+  assert.equal(claimNewestBaton(paths), null)
+  assert.equal(existsSync(join(dir, 'baton.json')), false)
+  assert.equal(existsSync(join(dir, 'baton.corrupt.json')), true)
+})
+
+test('a corrupt targeted claim returns null without throwing, and quarantines the file', () => {
+  const paths = fixture()
+  const dir = runDir(paths, 'bad-2')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'baton.json'), 'not valid json')
+  let result
+  assert.doesNotThrow(() => { result = claimBatonById(paths, 'bad-2') })
+  assert.equal(result, null)
+  assert.equal(existsSync(join(dir, 'baton.json')), false)
+  assert.equal(existsSync(join(dir, 'baton.corrupt.json')), true)
+})

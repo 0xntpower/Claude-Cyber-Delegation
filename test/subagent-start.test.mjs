@@ -184,3 +184,26 @@ test('the transcript block is labelled as the final portion with its byte cap', 
   assert.match(ctx, /400000 bytes/)
   assert.doesNotMatch(ctx, /## Full transcript/i)
 })
+
+// --- P2: a truncated file list must say so, not just carry the flag silently ---
+
+test('a truncated baton mentions the truncation and names the cap', () => {
+  const root = fixture()
+  writeBaton(ccdPaths(root), 'dead-6', {
+    ...BATON,
+    runId: 'dead-6',
+    state: { ...BATON.state, truncated: true }
+  })
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-6' }, { root, readTailFn: () => 'T' })
+  const ctx = out.hookSpecificOutput.additionalContext
+  assert.match(ctx, /truncat/i)
+  assert.match(ctx, /500/)
+})
+
+test('an untruncated baton says nothing about truncation', () => {
+  const root = fixture()
+  writeBaton(ccdPaths(root), 'dead-7', { ...BATON, runId: 'dead-7' })
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-7' }, { root, readTailFn: () => 'T' })
+  const ctx = out.hookSpecificOutput.additionalContext
+  assert.doesNotMatch(ctx, /truncat/i)
+})

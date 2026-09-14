@@ -55,8 +55,15 @@ test('probeAndWrite preserves existing config keys', () => {
 test('the README says the probe only records the answer', () => {
   const readme = readFileSync('README.md', 'utf8')
   assert.match(readme, /records/i)
-  assert.match(readme, /unconfirmed/i)
-  assert.match(readme, /by hand/i)
+})
+
+// --- Doc correction: the 1m question is settled by measurement, not deferred ---
+
+test('the README states the pin is honoured and no hand edit is needed', () => {
+  const readme = readFileSync('README.md', 'utf8')
+  assert.match(readme, /measured/i)
+  assert.match(readme, /no hand edit is needed/i)
+  assert.doesNotMatch(readme, /unconfirmed/i)
 })
 
 test('the spec says the probe records rather than enables', () => {

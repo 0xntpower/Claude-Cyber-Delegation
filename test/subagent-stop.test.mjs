@@ -188,3 +188,20 @@ test('an unknown model is still recorded rather than crashing', () => {
   const baton = JSON.parse(readFileSync(join(ccdPaths(d.root).runs, 'unk-1', 'baton.json'), 'utf8'))
   assert.equal(baton.refusedModel, 'unknown')
 })
+
+// --- P2: the systemMessage must say when the file list and diff are partial ---
+
+test('a truncated file set is named in the refusal systemMessage', () => {
+  const d = deps({
+    gitStateFn: () => ({ files: ['src/inject/a.c'], status: ' M src/inject/a.c', diffstat: '1 file changed', truncated: true })
+  })
+  const out = handleStop({ agent_id: 'trunc-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  assert.match(out.systemMessage, /truncat/i)
+  assert.match(out.systemMessage, /500/)
+})
+
+test('an untruncated file set says nothing about truncation', () => {
+  const d = deps()
+  const out = handleStop({ agent_id: 'trunc-2', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  assert.doesNotMatch(out.systemMessage, /truncat/i)
+})

@@ -63,6 +63,12 @@ score against everything else you know and decide.
 Check the evidence, not just the number. A 9 built from one kill in one attempt
 is weaker than a 9 from four kills in five attempts.
 
+A low or missing score can mean the area is safe, or it can mean the kills
+that would have scored it never touched a file to be attributed against.
+`unattributed` in the ledger, a sibling of `areas`, counts exactly those
+kills, so it shows how much of that silence to expect before you read a low
+score as safety.
+
 **The evidence is biased low, and knowing which way matters.** Areas come from
 the files a dead agent actually edited, so a kill that wrote nothing to disk
 produces no area and lands in no ledger entry. In the field roughly one kill in

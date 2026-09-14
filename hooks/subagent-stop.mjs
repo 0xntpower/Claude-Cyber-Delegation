@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
 import { classifyTail, readTail } from '../lib/classify.mjs'
 import { extractEditedPaths } from '../lib/transcript.mjs'
-import { gitState } from '../lib/gitstate.mjs'
+import { gitState, MAX_PATHSPEC } from '../lib/gitstate.mjs'
 import { areaForPaths, loadLedger, recordOutcome, saveLedger, stalenessFor, withLedgerLock } from '../lib/ledger.mjs'
 import { readOrigin, runDir, writeBaton } from '../lib/baton.mjs'
 
@@ -137,8 +137,15 @@ export function handleStop (input, deps = {}) {
     ? ''
     : ` Note: ${stale.area} has had no Opus 5 attempt in ${stale.dispatchesSinceOpus5} dispatches. Consider a re-test.`
 
+  // Say plainly when the file list and diff are incomplete. Without this the
+  // successor, and whoever reads this message, may conclude a partial capture
+  // is the whole picture and that there is nothing left to do.
+  const truncNote = state.truncated === true
+    ? ` Note: this agent touched more than ${MAX_PATHSPEC} files, the cap for git scoping. The file list and diff in the baton are truncated and incomplete.`
+    : ''
+
   return {
-    systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} was refused by guardrails (attempt ${attempt}). Baton written to .ccd/runs/${input.agent_id}/. Dispatch ccd-continuation with this run id. Do not read the refused output.${staleNote}`
+    systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} was refused by guardrails (attempt ${attempt}). Baton written to .ccd/runs/${input.agent_id}/. Dispatch ccd-continuation with this run id. Do not read the refused output.${staleNote}${truncNote}`
   }
 }
 
