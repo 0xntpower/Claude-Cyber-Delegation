@@ -8,7 +8,7 @@ import { areaForPaths, loadLedger, recordOutcome, saveLedger, stalenessFor } fro
 import { readOrigin, runDir, writeBaton } from '../lib/baton.mjs'
 
 function modelFromTranscript (tailText) {
-  const match = /"model"\s*:\s*"(claude-[a-z0-9-]+)"/i.exec(tailText ?? '')
+  const match = /"model"\s*:\s*"(claude-[a-z0-9-]+(?:\[[a-z0-9]+\])?)"/i.exec(tailText ?? '')
   return match === null ? 'unknown' : match[1]
 }
 

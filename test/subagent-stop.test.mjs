@@ -97,3 +97,10 @@ test('a refusal with no attributable files still records and still emits', () =>
   assert.equal(baton.area, null)
   assert.ok(out.systemMessage.length > 0)
 })
+
+test('captures a model ID carrying a 1M context suffix', () => {
+  const d = deps({ readTailFn: () => '{"model":"claude-opus-5[1m]","stop_reason":"refusal"}' })
+  const out = handleStop({ agent_id: 'a7', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  const baton = JSON.parse(readFileSync(join(ccdPaths(d.root).runs, 'a7', 'baton.json'), 'utf8'))
+  assert.equal(baton.refusedModel, 'claude-opus-5[1m]')
+})
