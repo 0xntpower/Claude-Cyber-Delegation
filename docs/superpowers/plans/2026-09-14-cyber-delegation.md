@@ -158,6 +158,7 @@ Create `.gitignore`:
 ```
 node_modules/
 .ccd/
+.superpowers/
 ```
 
 - [ ] **Step 4: Write minimal implementation**
@@ -248,7 +249,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { classify, readTail } from '../lib/classify.mjs'
+import { classify, classifyTail, readTail } from '../lib/classify.mjs'
 
 function withTail (text) {
   return () => text
@@ -304,11 +305,6 @@ test('classifyTail works directly on already-read text', () => {
 })
 ```
 
-Add `classifyTail` to the import at the top of the file:
-
-```js
-import { classify, classifyTail, readTail } from '../lib/classify.mjs'
-```
 
 - [ ] **Step 2: Run test to verify it fails**
 
