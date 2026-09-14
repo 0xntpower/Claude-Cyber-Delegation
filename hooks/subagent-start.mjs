@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
 import { readTail } from '../lib/classify.mjs'
-import { claimNewestBaton, writeOrigin } from '../lib/baton.mjs'
+import { claimBatonById, claimNewestBaton, clearNextClaim, readNextClaim, writeOrigin } from '../lib/baton.mjs'
 
 const CONTINUATION = 'ccd-continuation'
 
@@ -13,7 +13,7 @@ function fileList (files) {
   return files.length === 0 ? '(none attributable)' : files.map(f => `- ${f}`).join('\n')
 }
 
-function buildContext (baton, transcriptText) {
+function buildContext (baton, transcriptText, capBytes) {
   const header = [
     '# Cyber Delegation handoff',
     '',
@@ -47,8 +47,12 @@ function buildContext (baton, transcriptText) {
     return header + work + note
   }
 
+  // The injected text is the tail, not the whole transcript, and saying so
+  // matters: the successor must not conclude that an absent early step never
+  // happened. The tail is the right end to keep, because the work-in-progress
+  // and the refusal both live at the end.
   return header + work + block(
-    'Full transcript of the refused agent',
+    `Final portion of the refused agent's transcript (last ${capBytes} bytes; earlier turns are cut)`,
     '```\n' + transcriptText + '\n```'
   )
 }
@@ -61,7 +65,14 @@ export function handleStart (input, deps = {}) {
   const config = loadConfig(root)
   const readTailFn = deps.readTailFn ?? readTail
 
-  const claimed = claimNewestBaton(paths)
+  // Targeted claim first. The pointer names the run the orchestrator actually
+  // dispatched this successor for. Falling back to the newest unclaimed baton
+  // keeps the relay working when no pointer was written, which is the only
+  // behaviour that existed before.
+  const pointer = readNextClaim(paths)
+  let claimed = pointer === null ? null : claimBatonById(paths, pointer)
+  if (claimed !== null) clearNextClaim(paths)
+  if (claimed === null) claimed = claimNewestBaton(paths)
   if (claimed === null) return null
 
   writeOrigin(paths, input.agent_id, {
@@ -76,7 +87,7 @@ export function handleStart (input, deps = {}) {
   return {
     hookSpecificOutput: {
       hookEventName: 'SubagentStart',
-      additionalContext: buildContext(claimed.baton, transcriptText)
+      additionalContext: buildContext(claimed.baton, transcriptText, config.maxInjectedTranscriptBytes)
     }
   }
 }

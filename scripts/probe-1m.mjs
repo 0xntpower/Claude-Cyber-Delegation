@@ -52,8 +52,15 @@ export function probeAndWrite (root, runner = defaultRunner) {
 function main () {
   const root = findProjectRoot(process.cwd())
   const result = probeAndWrite(root)
-  process.stdout.write(`[ccd] 1M suffix: ${result.suffix === '' ? 'disabled' : 'enabled'}\n`)
+  process.stdout.write(`[ccd] 1M suffix probed as: ${result.suffix === '' ? 'unavailable' : 'available'}\n`)
   process.stdout.write(`[ccd] ${result.reason}\n`)
+  process.stdout.write('[ccd] This probe RECORDS the answer in .ccd/config.json. It changes no behaviour.\n')
+  if (result.suffix !== '') {
+    process.stdout.write('[ccd] To act on it, edit `model:` in agents/ccd-*.md by hand. Whether a full\n')
+    process.stdout.write('[ccd] model ID composes with the [1m] suffix is UNCONFIRMED, and the error name\n')
+    process.stdout.write('[ccd] alias_1m_unsupported suggests the suffix may be alias-only. A bad edit\n')
+    process.stdout.write('[ccd] breaks all three agents, so change one, dispatch it, and check.\n')
+  }
 }
 
 if (process.argv[1] !== undefined && process.argv[1].endsWith('probe-1m.mjs')) main()

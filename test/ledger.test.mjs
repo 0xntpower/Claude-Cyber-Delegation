@@ -1,11 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { ccdPaths } from '../lib/paths.mjs'
 import {
   loadLedger, saveLedger, areaForPaths, setPrior,
-  recordOutcome, scoreFor, stalenessFor, EMPTY_LEDGER
+  recordOutcome, scoreFor, stalenessFor, withLedgerLock, EMPTY_LEDGER
 } from '../lib/ledger.mjs'
 
 const CONFIG = { staleAfterDispatches: 10, staleAfterDays: 30 }
@@ -112,4 +116,101 @@ test('history is capped at one hundred entries', () => {
     recordOutcome(led, { area: 'a/**', outcome: 'normal', model: 'claude-opus-5' })
   }
   assert.equal(led.areas['a/**'].history.length, 100)
+})
+
+// --- C1: a null `areas` must not be mistaken for an object ---
+
+test('loadLedger rejects a ledger whose areas is null', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccd-null-'))
+  const f = join(dir, 'l.json')
+  writeFileSync(f, '{"version":1,"areas":null}')
+  assert.deepEqual(loadLedger(f), EMPTY_LEDGER)
+})
+
+test('recordOutcome on a ledger with a null areas does not throw', () => {
+  const led = { version: 1, areas: null }
+  assert.doesNotThrow(() => {
+    recordOutcome(led, { area: 'a/**', outcome: 'refusal', model: 'claude-opus-4-8' })
+  })
+  assert.equal(led.areas['a/**'].kills, 1)
+})
+
+test('setPrior on a ledger with a null areas does not throw', () => {
+  const led = { version: 1, areas: null }
+  assert.doesNotThrow(() => setPrior(led, 'a/**', 7, 'user-hint'))
+  assert.equal(scoreFor(led, 'a/**'), 7)
+})
+
+// --- C2: concurrent writers must not lose updates ---
+
+function lockFixture (name) {
+  const root = mkdtempSync(join(tmpdir(), name))
+  mkdirSync(join(root, '.git'))
+  return ccdPaths(root)
+}
+
+test('withLedgerLock runs the body and releases the lock', () => {
+  const paths = lockFixture('ccd-lock-')
+  let ran = false
+  withLedgerLock(paths, () => { ran = true })
+  assert.equal(ran, true)
+  assert.equal(existsSync(join(paths.base, 'ledger.lock')), false)
+})
+
+test('withLedgerLock releases the lock even when the body throws', () => {
+  const paths = lockFixture('ccd-lock-throw-')
+  assert.throws(() => withLedgerLock(paths, () => { throw new Error('boom') }))
+  assert.equal(existsSync(join(paths.base, 'ledger.lock')), false)
+})
+
+test('a lock older than thirty seconds is stolen rather than waited on', () => {
+  const paths = lockFixture('ccd-lock-stale-')
+  const lock = join(paths.base, 'ledger.lock')
+  mkdirSync(paths.base, { recursive: true })
+  writeFileSync(lock, '')
+  const ancient = new Date(Date.now() - 120000)
+  utimesSync(lock, ancient, ancient)
+  const started = Date.now()
+  let ran = false
+  withLedgerLock(paths, () => { ran = true })
+  assert.equal(ran, true)
+  assert.ok(Date.now() - started < 500, 'a stale lock must be stolen immediately, not waited out')
+  assert.equal(existsSync(lock), false)
+})
+
+test('a fresh foreign lock never blocks the hook indefinitely', () => {
+  const paths = lockFixture('ccd-lock-busy-')
+  const lock = join(paths.base, 'ledger.lock')
+  mkdirSync(paths.base, { recursive: true })
+  writeFileSync(lock, '')
+  let ran = false
+  withLedgerLock(paths, () => { ran = true })
+  assert.equal(ran, true, 'a lost ledger update beats a hung user session')
+  assert.equal(existsSync(lock), true, 'a lock we never held must not be removed')
+})
+
+test('six concurrent locked updates all land', async () => {
+  const paths = lockFixture('ccd-lock-race-')
+  const libUrl = pathToFileURL(resolve('lib/ledger.mjs')).href
+  const worker = join(paths.base, 'worker.mjs')
+  mkdirSync(paths.base, { recursive: true })
+  writeFileSync(worker, [
+    `import { withLedgerLock, loadLedger, recordOutcome, saveLedger } from ${JSON.stringify(libUrl)}`,
+    'const paths = JSON.parse(process.argv[2])',
+    'withLedgerLock(paths, () => {',
+    '  const led = loadLedger(paths.ledger)',
+    "  recordOutcome(led, { area: 'a/**', outcome: 'refusal', model: 'claude-opus-4-8' })",
+    '  saveLedger(paths.ledger, led)',
+    '})',
+    ''
+  ].join('\n'))
+
+  const run = promisify(execFile)
+  await Promise.all(
+    Array.from({ length: 6 }, () => run(process.execPath, [worker, JSON.stringify(paths)]))
+  )
+
+  const led = loadLedger(paths.ledger)
+  assert.equal(led.areas['a/**'].attempts, 6)
+  assert.equal(led.areas['a/**'].kills, 6)
 })

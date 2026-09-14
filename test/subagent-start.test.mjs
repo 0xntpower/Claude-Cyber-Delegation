@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleStart } from '../hooks/subagent-start.mjs'
 import { ccdPaths } from '../lib/paths.mjs'
-import { writeBaton, readOrigin } from '../lib/baton.mjs'
+import { writeBaton, readOrigin, writeNextClaim, readNextClaim, claimNewestBaton } from '../lib/baton.mjs'
+import { utimesSync } from 'node:fs'
 
 function fixture () {
   const root = mkdtempSync(join(tmpdir(), 'ccd-start-'))
@@ -74,4 +75,89 @@ test('the injected context instructs the successor to state its model', () => {
   writeBaton(ccdPaths(root), 'dead-4', { ...BATON, runId: 'dead-4' })
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-4' }, { root, readTailFn: () => 'T' })
   assert.match(out.hookSpecificOutput.additionalContext, /first line/i)
+})
+
+// --- C3: the pointer decides which run the successor picks up ---
+
+function twoRuns (root) {
+  const paths = ccdPaths(root)
+  writeBaton(paths, 'runA', { ...BATON, runId: 'runA', files: ['src/alpha/a.c'], transcript: '/a.jsonl' })
+  const aFile = join(paths.runs, 'runA', 'baton.json')
+  const past = new Date(Date.now() - 60000)
+  utimesSync(aFile, past, past)
+  writeBaton(paths, 'runB', { ...BATON, runId: 'runB', files: ['src/beta/b.c'], transcript: '/b.jsonl' })
+  return paths
+}
+
+test('a targeted claim beats a newer unclaimed baton', () => {
+  const root = fixture()
+  twoRuns(root)
+  writeNextClaim(ccdPaths(root), 'runA')
+  const out = handleStart(
+    { agent_type: 'ccd-continuation', agent_id: 'succ-A' },
+    { root, readTailFn: () => 'T' }
+  )
+  const ctx = out.hookSpecificOutput.additionalContext
+  assert.match(ctx, /runA/)
+  assert.match(ctx, /src\/alpha\/a\.c/)
+  assert.doesNotMatch(ctx, /src\/beta\/b\.c/)
+  assert.deepEqual(readOrigin(ccdPaths(root), 'succ-A'), { fromRunId: 'runA', attempt: 1 })
+})
+
+test('a successful targeted claim clears the pointer', () => {
+  const root = fixture()
+  twoRuns(root)
+  writeNextClaim(ccdPaths(root), 'runA')
+  handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-A' }, { root, readTailFn: () => 'T' })
+  assert.equal(readNextClaim(ccdPaths(root)), null)
+})
+
+test('two unclaimed batons are never conflated', () => {
+  const root = fixture()
+  const paths = twoRuns(root)
+  writeNextClaim(paths, 'runA')
+  handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-A' }, { root, readTailFn: () => 'T' })
+  writeNextClaim(paths, 'runB')
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-B' }, { root, readTailFn: () => 'T' })
+  const ctx = out.hookSpecificOutput.additionalContext
+  assert.match(ctx, /src\/beta\/b\.c/)
+  assert.doesNotMatch(ctx, /src\/alpha\/a\.c/)
+  assert.equal(claimNewestBaton(paths), null, 'both batons must now be claimed, neither orphaned')
+})
+
+test('with no pointer it falls back to the newest unclaimed baton', () => {
+  const root = fixture()
+  twoRuns(root)
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-N' }, { root, readTailFn: () => 'T' })
+  assert.match(out.hookSpecificOutput.additionalContext, /src\/beta\/b\.c/)
+})
+
+test('a pointer naming a nonexistent run falls back to the newest', () => {
+  const root = fixture()
+  twoRuns(root)
+  writeNextClaim(ccdPaths(root), 'runZ')
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-Z' }, { root, readTailFn: () => 'T' })
+  assert.match(out.hookSpecificOutput.additionalContext, /src\/beta\/b\.c/)
+})
+
+test('a pointer naming an already-claimed run falls back to the newest', () => {
+  const root = fixture()
+  const paths = twoRuns(root)
+  writeNextClaim(paths, 'runA')
+  handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-1' }, { root, readTailFn: () => 'T' })
+  writeNextClaim(paths, 'runA')
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-2' }, { root, readTailFn: () => 'T' })
+  assert.match(out.hookSpecificOutput.additionalContext, /src\/beta\/b\.c/)
+})
+
+// --- M2: the injected block must not claim to be the whole transcript ---
+
+test('the transcript block is labelled as the final portion with its byte cap', () => {
+  const root = fixture()
+  writeBaton(ccdPaths(root), 'dead-5', { ...BATON, runId: 'dead-5' })
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-5' }, { root, readTailFn: () => 'T' })
+  const ctx = out.hookSpecificOutput.additionalContext
+  assert.match(ctx, /final portion/i)
+  assert.match(ctx, /400000 bytes/)
+  assert.doesNotMatch(ctx, /## Full transcript/i)
 })

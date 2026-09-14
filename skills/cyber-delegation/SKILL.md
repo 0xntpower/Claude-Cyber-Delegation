@@ -19,11 +19,31 @@ When a subagent fails with a guardrail error:
 1. **Do not read its output.** That payload provably tripped a classifier, and
    your context is the one that cannot be recovered. The platform gives you
    status and error text only, which is all you need.
-2. Dispatch `ccd-continuation`. Pass the run id from the `[ccd]` message and
-   nothing else. The transcript, the file list, and the scoped git state are
-   injected into that agent automatically.
-3. A rate limit is not a guardrail refusal. Its remedy is waiting. The `[ccd]`
-   message tells you which one happened.
+2. **Write the run id to `.ccd/next-claim` before you dispatch.** The `[ccd]`
+   message names the run. One line, the run id, nothing else:
+
+   ```bash
+   printf '%s' 'dead-1' > .ccd/next-claim
+   ```
+
+   This is how the successor is told which run it is picking up. The
+   `SubagentStart` payload cannot carry the run id, so without this pointer the
+   hook falls back to **the newest unclaimed baton**, whichever run that
+   happens to be. With one refusal in flight that is the same thing. With two,
+   it is a coin flip, and the loser gets another run's transcript and another
+   run's diff while its own baton is orphaned. In a shared working tree that
+   means confidently editing the wrong files.
+
+3. Dispatch `ccd-continuation`. Pass the run id in the prompt for the reader's
+   benefit and nothing else. The transcript, the file list, and the scoped git
+   state are injected into that agent automatically from the baton the pointer
+   selected.
+4. A rate limit is not a guardrail refusal. Its remedy is waiting. The `[ccd]`
+   message tells you which one happened. Nothing is recorded in the ledger for
+   a rate limit, because the dispatch never ran.
+5. If the `[ccd]` message says the capture FAILED, do not dispatch a
+   continuation. There is no baton to claim. The refused agent's work, if any,
+   is still in the working tree.
 
 ## Rule 2: the risk ledger is advisory
 
@@ -42,6 +62,15 @@ score against everything else you know and decide.
 
 Check the evidence, not just the number. A 9 built from one kill in one attempt
 is weaker than a 9 from four kills in five attempts.
+
+**The evidence is biased low, and knowing which way matters.** Areas come from
+the files a dead agent actually edited, so a kill that wrote nothing to disk
+produces no area and lands in no ledger entry. In the field roughly one kill in
+five got far enough to touch a file. The rest died reading their brief, or were
+reviewers who never write. So a low score on an area is weak evidence of safety,
+and an area with no entry at all is not evidence of anything. Scores are a floor
+on observed hostility, never a ceiling. Read a high score as informative and a
+low one as mostly silence.
 
 When the ledger reports that a high-score area has gone stale, surface that to
 the user. Only they decide when to re-test an area against Opus 5.
@@ -63,17 +92,18 @@ finished work it did not start.
 
 ## Recording a risk hint
 
-When the user says a component is likely to trigger guardrails, write it into
-`.ccd/risk-ledger.json` as a prior:
+When the user says a component is likely to trigger guardrails, record it as a
+prior with the script. Area glob first, score from 1 to 10 second:
 
-```json
-{
-  "version": 1,
-  "areas": {
-    "src/inject/**": { "score": 8, "source": "user-hint", "attempts": 0, "kills": 0, "successes": 0, "byModel": {}, "lastOpus5AttemptAt": null, "dispatchesSinceOpus5": 0, "history": [] }
-  }
-}
+```bash
+node scripts/set-prior.mjs 'src/inject/**' 8
 ```
 
-Merge into the existing file rather than overwriting it. The user never edits
-this file by hand.
+**Do not hand-write `.ccd/risk-ledger.json`, and do not hand-merge into it.**
+The hooks own that file, several can be writing it at once, and its shape has
+edges that are not visible from a sample. The script loads it, clamps the score,
+and saves it under the same lock the hooks take. A hand-written ledger with the
+wrong shape used to take the whole relay down silently.
+
+The user never edits this file by hand either. Their hint is conversational and
+you run the script.

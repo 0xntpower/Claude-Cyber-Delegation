@@ -21,8 +21,16 @@ node scripts/probe-1m.mjs
 ```
 
 The probe determines whether `claude-opus-4-6[1m]` resolves on your account and
-writes the answer to `.ccd/config.json`. If it cannot tell, it writes the safe
-default and says so.
+**records** the answer in `.ccd/config.json` for you to act on. If it cannot
+tell, it records the safe default and says so.
+
+Recording is all it does. Nothing at runtime reads that value: the three agents
+carry a static `model: claude-opus-4-6` in their frontmatter, because frontmatter
+is the only place a full model ID can be pinned. Enabling 1M context therefore
+means editing `model:` in `agents/ccd-*.md` by hand, and **whether a full model
+ID composes with the `[1m]` suffix at all is unconfirmed** — the platform error
+is named `alias_1m_unsupported`, which hints the suffix may be alias-only. If you
+try it, change one agent, dispatch it, and confirm before changing the rest.
 
 ## What it does
 

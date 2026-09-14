@@ -49,3 +49,24 @@ test('probeAndWrite preserves existing config keys', () => {
   assert.equal(cfg.maxAttempts, 2)
   assert.deepEqual(cfg.ladder, ['claude-opus-4-6'])
 })
+
+// --- I1: the probe records, it does not enable ---
+
+test('the README says the probe only records the answer', () => {
+  const readme = readFileSync('README.md', 'utf8')
+  assert.match(readme, /records/i)
+  assert.match(readme, /unconfirmed/i)
+  assert.match(readme, /by hand/i)
+})
+
+test('the spec says the probe records rather than enables', () => {
+  const spec = readFileSync('docs/superpowers/specs/2026-09-14-cyber-delegation-design.md', 'utf8')
+  assert.match(spec, /probe records, it does not enable/i)
+})
+
+// --- I2: the ladder cannot select a model, and the spec must say so ---
+
+test('the spec says nextModel records intent rather than selecting a model', () => {
+  const spec = readFileSync('docs/superpowers/specs/2026-09-14-cyber-delegation-design.md', 'utf8')
+  assert.match(spec, /records intent, it does not select a model/i)
+})

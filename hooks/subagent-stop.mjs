@@ -4,12 +4,19 @@ import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
 import { classifyTail, readTail } from '../lib/classify.mjs'
 import { extractEditedPaths } from '../lib/transcript.mjs'
 import { gitState } from '../lib/gitstate.mjs'
-import { areaForPaths, loadLedger, recordOutcome, saveLedger, stalenessFor } from '../lib/ledger.mjs'
+import { areaForPaths, loadLedger, recordOutcome, saveLedger, stalenessFor, withLedgerLock } from '../lib/ledger.mjs'
 import { readOrigin, runDir, writeBaton } from '../lib/baton.mjs'
 
+const MODEL_IN_TAIL = /"model"\s*:\s*"(claude-[a-z0-9-]+(?:\[[a-z0-9]+\])?)"/gi
+
+// The LAST match, not the first. The platform degrades Opus 5 to 4.8 mid-session
+// as a matter of course, so the first model named in a 256KB tail is often the
+// pre-degrade one while the refusal came from the model that replaced it.
 function modelFromTranscript (tailText) {
-  const match = /"model"\s*:\s*"(claude-[a-z0-9-]+(?:\[[a-z0-9]+\])?)"/i.exec(tailText ?? '')
-  return match === null ? 'unknown' : match[1]
+  const matches = String(tailText ?? '').matchAll(MODEL_IN_TAIL)
+  let last = null
+  for (const match of matches) last = match[1]
+  return last === null ? 'unknown' : last
 }
 
 function handoffReport (input, attempt, files, state) {
@@ -39,6 +46,15 @@ function handoffReport (input, attempt, files, state) {
 export function handleStop (input, deps = {}) {
   if (input.stop_hook_active === true) return null
 
+  // Without an agent id there is no run directory, so the origin read throws,
+  // the hook exits 0 with empty stdout, and the refusal disappears silently.
+  // Say so instead, and say it before anything has been written.
+  if (typeof input.agent_id !== 'string' || input.agent_id.trim().length === 0) {
+    return {
+      systemMessage: '[ccd] A subagent stopped but the hook payload carried no agent_id, so its work could not be captured and no baton was written. If that subagent was refused, its work-in-progress is still in the working tree and needs picking up by hand.'
+    }
+  }
+
   const root = deps.root ?? findProjectRoot(process.cwd())
   const paths = ccdPaths(root)
   const config = loadConfig(root)
@@ -58,17 +74,26 @@ export function handleStop (input, deps = {}) {
   const files = extractFn(transcript, root)
   const area = areaForPaths(files)
 
-  const ledger = loadLedger(paths.ledger)
-  recordOutcome(ledger, { area, outcome, model, agentType: input.agent_type })
-  saveLedger(paths.ledger, ledger)
-
-  if (outcome === 'normal') return null
-
+  // A rate limit is not a refusal, and it is not evidence either. The dispatch
+  // never ran. Recording it would inflate the attempts denominator with a
+  // non-event and, on an Opus 5 model string, reset the staleness clock for an
+  // attempt that never happened. So return before the ledger is touched.
   if (outcome === 'rate_limit') {
     return {
-      systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} stopped on a rate limit, not a guardrail. Wait and retry. No downshift performed.`
+      systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} stopped on a rate limit, not a guardrail. Wait and retry. No downshift performed, and no ledger evidence recorded.`
     }
   }
+
+  // Read-modify-write under a lock. Clustered concurrent refusals are the
+  // design case, and unsynchronised writers measurably lose half of them.
+  let ledger = null
+  withLedgerLock(paths, () => {
+    ledger = loadLedger(paths.ledger)
+    recordOutcome(ledger, { area, outcome, model, agentType: input.agent_type })
+    saveLedger(paths.ledger, ledger)
+  })
+
+  if (outcome === 'normal') return null
 
   const origin = readOrigin(paths, input.agent_id)
   const attempt = origin === null ? 1 : origin.attempt + 1
@@ -85,7 +110,7 @@ export function handleStop (input, deps = {}) {
     }
   }
 
-  writeBaton(paths, input.agent_id, {
+  const batonFile = writeBaton(paths, input.agent_id, {
     runId: input.agent_id,
     agentType: input.agent_type ?? null,
     transcript: transcript ?? null,
@@ -98,7 +123,16 @@ export function handleStop (input, deps = {}) {
     at: new Date().toISOString()
   })
 
-  const stale = area === null ? null : stalenessFor(ledger, area, config)
+  // Never assert a baton that is not on disk. Telling the orchestrator to
+  // dispatch a continuation when the capture failed sends it to claim nothing,
+  // or worse, a stale baton from an unrelated run.
+  if (batonFile === null) {
+    return {
+      systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} was refused by guardrails (attempt ${attempt}), but capturing its work FAILED and no baton was written for run ${input.agent_id}. Do not dispatch ccd-continuation for this run. Check that .ccd/runs is writable. The refused agent's work-in-progress, if any, is still in the working tree.`
+    }
+  }
+
+  const stale = area === null || ledger === null ? null : stalenessFor(ledger, area, config)
   const staleNote = stale === null
     ? ''
     : ` Note: ${stale.area} has had no Opus 5 attempt in ${stale.dispatchesSinceOpus5} dispatches. Consider a re-test.`

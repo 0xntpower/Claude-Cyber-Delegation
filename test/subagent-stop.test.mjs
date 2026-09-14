@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleStop } from '../hooks/subagent-stop.mjs'
@@ -103,4 +103,88 @@ test('captures a model ID carrying a 1M context suffix', () => {
   const out = handleStop({ agent_id: 'a7', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
   const baton = JSON.parse(readFileSync(join(ccdPaths(d.root).runs, 'a7', 'baton.json'), 'utf8'))
   assert.equal(baton.refusedModel, 'claude-opus-5[1m]')
+})
+
+// --- I4: a rate limit is not evidence ---
+
+test('a rate limit leaves the ledger completely untouched', () => {
+  const d = deps({
+    classifyFn: () => 'rate_limit',
+    readTailFn: () => '{"model":"claude-opus-5","stop_reason":"rate_limit"}'
+  })
+  handleStop({ agent_id: 'rl-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  assert.equal(existsSync(ccdPaths(d.root).ledger), false, 'a non-event must not create a ledger')
+})
+
+test('a rate limit does not reset the Opus 5 staleness clock', () => {
+  const d = deps()
+  // Establish real evidence from a genuine 4.6 refusal first.
+  handleStop({ agent_id: 'real-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, {
+    ...d,
+    readTailFn: () => '{"model":"claude-opus-4-6","stop_reason":"refusal"}'
+  })
+  const before = JSON.parse(readFileSync(ccdPaths(d.root).ledger, 'utf8')).areas['src/inject/**']
+  assert.equal(before.dispatchesSinceOpus5, 1)
+
+  handleStop({ agent_id: 'rl-2', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, {
+    ...d,
+    classifyFn: () => 'rate_limit',
+    readTailFn: () => '{"model":"claude-opus-5","stop_reason":"rate_limit"}'
+  })
+  const after = JSON.parse(readFileSync(ccdPaths(d.root).ledger, 'utf8')).areas['src/inject/**']
+  assert.equal(after.attempts, 1, 'a dispatch that never ran must not inflate the denominator')
+  assert.equal(after.dispatchesSinceOpus5, 1)
+  assert.equal(after.lastOpus5AttemptAt, null, 'an Opus 5 rate limit is not an Opus 5 attempt')
+})
+
+// --- I5: never assert a capture that did not happen ---
+
+test('a payload with no agent_id names the problem and writes nothing', () => {
+  const d = deps()
+  const out = handleStop({ agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  assert.match(out.systemMessage, /agent_id/)
+  assert.equal(existsSync(ccdPaths(d.root).ledger), false, 'the ledger must not be mutated first')
+})
+
+test('a blank agent_id is rejected the same way', () => {
+  const d = deps()
+  const out = handleStop({ agent_id: '   ', agent_transcript_path: '/t.jsonl' }, d)
+  assert.match(out.systemMessage, /agent_id/)
+})
+
+test('a failed baton write says FAILED instead of claiming success', () => {
+  const d = deps()
+  // Occupying the run directory path with a file makes mkdirSync fail, which is
+  // exactly the shape of the real failure: writeBaton returns null.
+  mkdirSync(ccdPaths(d.root).runs, { recursive: true })
+  writeFileSync(join(ccdPaths(d.root).runs, 'blocked'), 'not a directory')
+  const out = handleStop({ agent_id: 'blocked', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  assert.match(out.systemMessage, /FAILED/)
+  assert.doesNotMatch(out.systemMessage, /Baton written/)
+  assert.match(out.systemMessage, /blocked/)
+})
+
+// --- M1: the model that refused is the last one named, not the first ---
+
+test('a mid-session degrade records the later model, not the earlier one', () => {
+  const d = deps({
+    readTailFn: () => [
+      '{"model":"claude-opus-5","type":"assistant"}',
+      '{"model":"claude-opus-4-8","stop_reason":"refusal"}'
+    ].join(String.fromCharCode(10))
+  })
+  handleStop({ agent_id: 'deg-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  const baton = JSON.parse(readFileSync(join(ccdPaths(d.root).runs, 'deg-1', 'baton.json'), 'utf8'))
+  assert.equal(baton.refusedModel, 'claude-opus-4-8')
+  const area = JSON.parse(readFileSync(ccdPaths(d.root).ledger, 'utf8')).areas['src/inject/**']
+  assert.equal(area.byModel['claude-opus-4-8'].kills, 1)
+  assert.equal(area.dispatchesSinceOpus5, 1, 'a degraded dispatch is not an Opus 5 attempt')
+  assert.equal(area.lastOpus5AttemptAt, null)
+})
+
+test('an unknown model is still recorded rather than crashing', () => {
+  const d = deps({ readTailFn: () => 'no model field here' })
+  handleStop({ agent_id: 'unk-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  const baton = JSON.parse(readFileSync(join(ccdPaths(d.root).runs, 'unk-1', 'baton.json'), 'utf8'))
+  assert.equal(baton.refusedModel, 'unknown')
 })

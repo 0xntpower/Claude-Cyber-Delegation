@@ -54,6 +54,16 @@ the suffix may be alias-level and may not compose with a full model ID. The
 installer probes `claude-opus-4-6[1m]` and falls back to plain
 `claude-opus-4-6` on rejection. It must never fail mid-refusal.
 
+**The probe records, it does not enable.** `oneMillionSuffix` in
+`.ccd/config.json` is an observation written for the operator, and no runtime
+code reads it. The model pin lives in agent frontmatter, which is static by
+necessity, so acting on a positive probe means editing `model:` in
+`agents/ccd-*.md` by hand. That edit is **unvalidated**: whether a full model ID
+composes with the suffix has never been confirmed on a live dispatch, and the
+`alias_1m_unsupported` name is evidence against it. Auto-rewriting three agent
+files with syntax nobody has seen accepted would risk breaking every agent the
+plugin ships, which is worse than leaving 1M context on the table.
+
 ## Field intelligence
 
 Gathered from the live Opus 5 orchestrator, not assumed.
@@ -266,6 +276,14 @@ All three share:
    - `state`, from `git diff --stat` and `git status --porcelain`, **intersected
      with `files`**
    - `attempt`, `next_model`, `agent_type`, and the derived `area` glob
+
+   `next_model` **records intent, it does not select a model.** The successor's
+   model is pinned in `agents/ccd-continuation.md`, and frontmatter is the only
+   place a full model ID can be expressed at all, so a configurable ladder
+   cannot choose one. `config.ladder` therefore feeds the field, the field
+   documents what the ladder said, and the pin is what actually runs. The field
+   stays because a baton that does not say which model was meant to pick the
+   work up is a worse forensic record than one that does.
 4. Update `risk-ledger.json`, adding 2 for the touched area and recording the
    model.
 5. Emit `systemMessage` so a refusal is visible to the user even if the skill
@@ -276,8 +294,25 @@ score has a denominator. Without logged successes a score is only a kill count.
 
 ### Hook: `subagent-start`
 
-When `agent_type == ccd-continuation`, claim the newest unclaimed baton and emit
-its contents as `additionalContext`:
+When `agent_type == ccd-continuation`, claim a baton and emit its contents as
+`additionalContext`.
+
+**Which baton is chosen matters.** The `SubagentStart` payload is exactly
+`{hook_event_name, agent_id, agent_type}` plus the common base, verified against
+the 2.1.270 binary. It does not carry the dispatch prompt, so the run id cannot
+be threaded through the hook. Claiming the globally newest unclaimed baton is
+therefore a guess, and it is wrong exactly when it matters most: with two
+overlapping refusals, the successor dispatched for run A receives run B's
+transcript and run B's diff, run A's baton is orphaned, and in a shared working
+tree the successor confidently edits the wrong files.
+
+The resolution is a pointer file. The orchestrator writes the run id to
+`.ccd/next-claim` **before** dispatching `ccd-continuation`. The hook reads it,
+claims that specific run's baton with the same atomic `openSync(lock, 'wx')`, and
+clears the pointer. When the pointer is absent, or names a run with no claimable
+baton, it falls back to the newest unclaimed baton.
+
+Either way the payload is:
 
 - **Attempt 1**, the full dead transcript plus scoped git state. Re-injecting
   the content that tripped Opus 4.8 is intentional. The successor is a different
@@ -285,7 +320,8 @@ its contents as `additionalContext`:
 - **Attempt 2**, a degraded payload consisting of the original spec, the scoped
   diff, and a progress note. No transcript.
 
-The orchestrator passes only a run id. It never handles the payload.
+The orchestrator passes only a run id, through `.ccd/next-claim`. It never
+handles the payload.
 
 ### Skill
 
