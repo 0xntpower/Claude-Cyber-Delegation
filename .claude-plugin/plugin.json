@@ -1,0 +1,8 @@
+{
+  "name": "cyber-delegation",
+  "description": "Dispatch Opus 4.6 subagents directly, and hand guardrail-refused work to them automatically with transcript and git state intact",
+  "version": "0.1.0",
+  "author": { "name": "ntpower" },
+  "license": "MIT",
+  "keywords": ["guardrails", "delegation", "subagents", "failover"]
+}
