@@ -40,9 +40,10 @@ not treated as a refusal, since waiting fixes one and downshifting does not.
 
 All three pin `model: claude-opus-4-6`. A live dispatch confirmed the pin holds:
 the agent reported `claude-opus-4-6[1m]` while its parent session ran Opus 5.
-The `[1m]` arrives from session configuration, so no frontmatter suffix and no
-hand edit is needed. One caveat on that evidence: a model reads its own ID from
-its system prompt rather than from the routing layer.
+The `[1m]` arrives from session configuration, so
+no hand edit is needed and no frontmatter suffix either. One caveat on that
+evidence: a model reads its own ID from its system prompt rather than from the
+routing layer.
 
 `scripts/probe-1m.mjs` checks whether `claude-opus-4-6[1m]` resolves on your
 account and records the answer in `.ccd/config.json`. It records, it does not
