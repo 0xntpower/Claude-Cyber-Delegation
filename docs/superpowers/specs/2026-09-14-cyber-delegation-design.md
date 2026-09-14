@@ -178,12 +178,28 @@ agents/
   ccd-reviewer.md        model: claude-opus-4-6   (no Edit or Write)
 hooks/
   hooks.json
-  run-hook.cmd           polyglot wrapper, superpowers pattern, Windows-proven
-  subagent-stop          extensionless bash
-  subagent-start
+  subagent-stop.mjs      entry point
+  subagent-start.mjs     entry point
+lib/
+  paths.mjs              project root, .ccd locations, config with defaults
+  classify.mjs           refusal / rate_limit / normal
+  transcript.mjs         edited-path extraction from JSONL
+  gitstate.mjs           git state scoped by pathspec
+  ledger.mjs             risk scores, evidence, staleness
+  baton.mjs              baton write, atomic claim, origin linkage
 skills/
   cyber-delegation/SKILL.md
+scripts/
+  probe-1m.mjs           install-time [1m] capability probe
+test/                    node:test suites, one per lib module
 ```
+
+**Implementation language: Node ESM, zero dependencies.** The hooks must parse
+JSON from stdin, scan JSONL transcripts, shell out to git, and emit JSON. `jq`
+is not present on the target machine, which rules out the bash approach. Node
+v24 is available with a built-in test runner. Using `.mjs` also avoids the
+Windows `.sh` auto-detection that forced superpowers into a polyglot wrapper, so
+hooks are invoked directly as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<name>.mjs"`.
 
 Runtime state lives in the project at `.ccd/`:
 
@@ -225,15 +241,28 @@ All three share:
 
 1. If `stop_hook_active` is true, exit 0 immediately. Without this the plugin
    ships an infinite refusal-to-relaunch loop.
-2. Classify from `last_assistant_message`, with no transcript parse on the hot
-   path. Three outcomes: `refusal`, `rate_limit`, `normal`. **A rate limit is
-   not a refusal.** Its remedy is waiting rather than downshifting, and both
+2. Classify the outcome as `refusal`, `rate_limit`, or `normal`. **A rate limit
+   is not a refusal.** Its remedy is waiting rather than downshifting, and both
    were observed in the field.
+
+   **Classification must read the transcript tail, not `last_assistant_message`.**
+   An earlier draft of this design proposed the cheaper path. Field evidence
+   rules it out: on a refusal the orchestrator observed only *"whatever partial
+   text the agent emitted before dying, which was typically one line like 'I'll
+   start by reading the brief.'"* That field carries pre-death partial output,
+   not the refusal marker, so classifying from it would report `normal` on every
+   refusal. The authoritative signal is `"stop_reason":"refusal"` in the
+   transcript. The hook scans the final 256 KB rather than the whole file, which
+   keeps the cost bounded without sacrificing correctness.
 3. On `refusal` only, write `.ccd/runs/<agent_id>/baton.json` containing:
    - `transcript`, the `agent_transcript_path` supplied directly in the payload
-   - `files`, every `"file_path"` in that transcript, deduplicated. This is
-     authoritative attribution for a shared tree. It names exactly what this
-     agent touched, with no coordination protocol and no race.
+   - `files`, every `"file_path"` written by an Edit or Write tool call in that
+     transcript, deduplicated and **filtered to paths under the project root**.
+     This is authoritative attribution for a shared tree. It names exactly what
+     this agent touched, with no coordination protocol and no race. The filter
+     is not optional: a sampled transcript contained `file_path` entries under
+     the session scratchpad in `AppData\Local\Temp`, which would otherwise
+     pollute both the git scope and the derived risk area.
    - `state`, from `git diff --stat` and `git status --porcelain`, **intersected
      with `files`**
    - `attempt`, `next_model`, `agent_type`, and the derived `area` glob
