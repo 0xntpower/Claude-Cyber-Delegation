@@ -48,7 +48,9 @@ export function buildStatus (root) {
     return { ok: true, message: lines.join('\n') }
   }
 
-  const ledger = loadLedger(paths.ledger)
+  // Status is read-only by contract: a broken ledger must not cause a side
+  // effect just because someone asked what state the project is in.
+  const ledger = loadLedger(paths.ledger, { skipBackup: true })
   const config = loadConfig(root)
   const areas = Object.entries(ledger.areas ?? {})
   lines.push(`[ccd] Ledger: present (${paths.ledger}), ${areas.length} scored areas.`)

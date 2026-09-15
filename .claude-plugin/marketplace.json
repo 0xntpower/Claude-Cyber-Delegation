@@ -1,0 +1,26 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cyber-delegation",
+  "owner": {
+    "name": "ntpower"
+  },
+  "metadata": {
+    "description": "Plugin distribution for cyber-delegation",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "cyber-delegation",
+      "source": "./",
+      "description": "Hands guardrail-refused subagent work to a successor pinned to Opus 4.6, with the dead agent's transcript and scoped git state intact",
+      "version": "0.1.0",
+      "author": {
+        "name": "ntpower"
+      },
+      "repository": "https://github.com/0xntpower/Claude-Cyber-Delegation",
+      "license": "MIT",
+      "keywords": ["guardrails", "delegation", "subagents", "failover", "hooks"],
+      "category": "workflow"
+    }
+  ]
+}

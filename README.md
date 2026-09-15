@@ -78,9 +78,10 @@ That creates `.ccd/enabled`. Both hooks check for it first, before reading a
 transcript, loading the ledger, or invoking git, so an unarmed project pays
 only for a directory stat. The setting is sticky: it survives across sessions
 until `/ccd-disable` removes the marker. The first hook fire of a session in
-an armed project always prints a one-line notice, even when the outcome is
-otherwise silent, so a sticky enable never goes unnoticed. Check the current
-state, including the risk ledger summary, with `/ccd-status`.
+an armed project prints a one-line notice, even when the outcome is otherwise
+silent, so a sticky enable does not go unnoticed. The notice is skipped when
+the harness sends no session id, since there is nothing to key it to. Check
+the current state, including the risk ledger summary, with `/ccd-status`.
 
 ## Test
 
@@ -88,4 +89,5 @@ state, including the risk ledger summary, with `/ccd-status`.
 npm test
 ```
 
-207 tests, no runtime dependencies.
+No runtime dependencies. The count is whatever `npm test` reports, which is
+why it is not written down here.

@@ -108,8 +108,15 @@ function computeStop (input, deps, root, paths) {
 
   if (outcome === 'normal') return null
 
+  // A non-integer or negative attempt is treated exactly like a missing
+  // origin: restart the count at 1 rather than let `+ 1` on a string or a
+  // corrupt number defeat the attempt cap this guards (`"two" + 1` is
+  // `"two1"`, which is never `> config.maxAttempts` and never `>= 2`).
   const origin = readOrigin(paths, input.agent_id)
-  const attempt = origin === null ? 1 : origin.attempt + 1
+  const priorAttempt = origin !== null && Number.isInteger(origin.attempt) && origin.attempt > 0
+    ? origin.attempt
+    : 0
+  const attempt = priorAttempt + 1
   const state = gitStateFn(root, files)
 
   if (attempt > config.maxAttempts) {

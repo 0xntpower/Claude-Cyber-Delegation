@@ -49,18 +49,26 @@ export function probeAndWrite (root, runner = defaultRunner) {
   return result
 }
 
+// Split from `main` so a test can inspect exactly what the operator sees
+// without shelling out. A live dispatch settled the question this used to
+// hedge on: the pin in agents/ccd-*.md is honoured, and the [1m] modifier
+// arrives from session configuration and propagates onto it without ever
+// appearing in frontmatter. So this records an observation and nothing more.
+export function probeMessageLines (result) {
+  return [
+    `[ccd] 1M suffix probed as: ${result.suffix === '' ? 'unavailable' : 'available'}`,
+    `[ccd] ${result.reason}`,
+    '[ccd] This probe RECORDS whether claude-opus-4-6[1m] resolves for this account.',
+    '[ccd] Nothing at runtime reads oneMillionSuffix from .ccd/config.json, and no hand',
+    '[ccd] edit of agents/ccd-*.md is needed: a live dispatch showed the [1m] modifier',
+    '[ccd] arrives from session configuration and reaches a bare frontmatter pin on its own.'
+  ]
+}
+
 function main () {
   const root = findProjectRoot(process.cwd())
   const result = probeAndWrite(root)
-  process.stdout.write(`[ccd] 1M suffix probed as: ${result.suffix === '' ? 'unavailable' : 'available'}\n`)
-  process.stdout.write(`[ccd] ${result.reason}\n`)
-  process.stdout.write('[ccd] This probe RECORDS the answer in .ccd/config.json. It changes no behaviour.\n')
-  if (result.suffix !== '') {
-    process.stdout.write('[ccd] To act on it, edit `model:` in agents/ccd-*.md by hand. Whether a full\n')
-    process.stdout.write('[ccd] model ID composes with the [1m] suffix is UNCONFIRMED, and the error name\n')
-    process.stdout.write('[ccd] alias_1m_unsupported suggests the suffix may be alias-only. A bad edit\n')
-    process.stdout.write('[ccd] breaks all three agents, so change one, dispatch it, and check.\n')
-  }
+  for (const line of probeMessageLines(result)) process.stdout.write(`${line}\n`)
 }
 
 if (process.argv[1] !== undefined && process.argv[1].endsWith('probe-1m.mjs')) main()

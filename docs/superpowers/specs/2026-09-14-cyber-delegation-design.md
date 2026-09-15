@@ -188,9 +188,9 @@ enforced.
 against Opus 5. It keeps advising 4.6 until the user asks for a re-test.
 
 To keep a stale score from silently costing Opus 5 quality forever, the ledger
-**surfaces staleness**. When an area has gone `stale_after_dispatches` (default
+**surfaces staleness**. When an area has gone `staleAfterDispatches` (default
 10) without an Opus 5 attempt, and its most recent Opus 5 evidence is older than
-`stale_after_days` (default 30), the plugin reports that in its status output
+`staleAfterDays` (default 30), the plugin reports that in its status output
 and in the refusal `systemMessage`. Both thresholds live in `.ccd/config.json`.
 The user retains control. The plugin supplies the signal that prompts them to
 use it.
@@ -238,12 +238,20 @@ Runtime state lives in the project at `.ccd/`:
 
 ```
 .ccd/
-  enabled                ISO timestamp, presence is the opt-in gate
-  announced/<session_id> once-per-session marker for the armed notice
-  config.json            ladder, attempt budget, probed 1m support,
-                         stale_after_dispatches, stale_after_days
-  risk-ledger.json       scores and evidence, written by hooks
-  runs/<agent_id>/       batons, captured git state, transcript pointers
+  enabled                     ISO timestamp, presence is the opt-in gate
+  announced/<session_id>      once-per-session marker for the armed notice
+  next-claim                  run id pointer, written before dispatching ccd-continuation
+  config.json                 ladder, attempt budget, probed 1m support,
+                               staleAfterDispatches, staleAfterDays
+  risk-ledger.json            scores and evidence, written by hooks
+  risk-ledger.corrupt-*.json  timestamped backup of a ledger that failed to parse or load
+  ledger.lock                 short-lived lock serialising ledger read-modify-write
+  runs/<agent_id>/            batons, captured git state, transcript pointers
+    baton.json                 transcript pointer, touched files, scoped git state, attempt
+    baton.corrupt.json         a baton that failed to parse, quarantined rather than lost
+    origin.json                which run this successor claimed, and its attempt number
+    claimed.lock                exclusive marker, a baton is claimed at most once
+    handoff.md                  written once maxAttempts is exceeded, for a human decision
 ```
 
 ### Gate
@@ -333,9 +341,9 @@ All three share:
      pollute both the git scope and the derived risk area.
    - `state`, from `git diff --stat` and `git status --porcelain`, **intersected
      with `files`**
-   - `attempt`, `next_model`, `agent_type`, and the derived `area` glob
+   - `attempt`, `nextModel`, `agentType`, and the derived `area` glob
 
-   `next_model` **records intent, it does not select a model.** The successor's
+   `nextModel` **records intent, it does not select a model.** The successor's
    model is pinned in `agents/ccd-continuation.md`, and frontmatter is the only
    place a full model ID can be expressed at all, so a configurable ladder
    cannot choose one. `config.ladder` therefore feeds the field, the field

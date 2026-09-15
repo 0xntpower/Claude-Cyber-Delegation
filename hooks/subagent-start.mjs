@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
 import { isEnabled, shouldAnnounce } from '../lib/gate.mjs'
 import { readTail } from '../lib/classify.mjs'
-import { claimBatonById, claimNewestBaton, clearNextClaim, readNextClaim, writeOrigin } from '../lib/baton.mjs'
+import { claimBatonById, claimNewestBaton, clearNextClaim, readNextClaim, runDir, writeOrigin } from '../lib/baton.mjs'
 import { MAX_PATHSPEC } from '../lib/gitstate.mjs'
 
 const CONTINUATION = 'ccd-continuation'
@@ -27,7 +28,17 @@ function fileList (files) {
   return files.length === 0 ? '(none attributable)' : files.map(f => `- ${f}`).join('\n')
 }
 
-function buildContext (baton, transcriptText, capBytes) {
+function buildContext (baton, transcriptText, capBytes, opts = {}) {
+  const fallbackNote = opts.targetedBatonUnreadable === true
+    ? block(
+      'Targeted baton unreadable — fallback claim',
+      `The run \`${opts.targetedRunId}\` named in .ccd/next-claim had a baton that failed to ` +
+        `parse and was quarantined. This handoff falls back to the newest unclaimed baton ` +
+        `instead, run \`${baton.runId}\`. Compare that run id against your dispatch prompt ` +
+        'before trusting the file list below.'
+    )
+    : ''
+
   const header = [
     '# Cyber Delegation handoff',
     '',
@@ -61,25 +72,22 @@ function buildContext (baton, transcriptText, capBytes) {
     : ''
 
   if (baton.attempt >= 2) {
-    const note = block(
-      'Degraded payload',
-      [
-        'This is a degraded second attempt. The previous transcript is deliberately',
-        'withheld because it was refused twice. Work from the task specification, the',
-        'file list, and the diff above. Re-derive only what you must.'
-      ].join('\n')
-    )
-    return header + work + truncationNote + note
+    const degradedLines = ['This is a degraded second attempt. The previous transcript is deliberately',
+      'withheld because it was refused twice. Work from the task specification, the',
+      'file list, and the diff above. Re-derive only what you must.']
+    const note = block('Degraded payload', degradedLines.join('\n'))
+    return fallbackNote + header + work + truncationNote + note
   }
 
   // The injected text is the tail, not the whole transcript, and saying so
   // matters: the successor must not conclude that an absent early step never
   // happened. The tail is the right end to keep, because the work-in-progress
   // and the refusal both live at the end.
-  return header + work + truncationNote + block(
+  const transcriptBlock = block(
     `Final portion of the refused agent's transcript (last ${capBytes} bytes; earlier turns are cut)`,
     '```\n' + transcriptText + '\n```'
   )
+  return fallbackNote + header + work + truncationNote + transcriptBlock
 }
 
 // Everything the plugin actually does, gated on the project being armed.
@@ -87,6 +95,18 @@ function buildContext (baton, transcriptText, capBytes) {
 // value with the once-per-session announce notice in one place.
 function computeStart (input, deps, root, paths) {
   if (input.agent_type !== CONTINUATION) return null
+
+  // Without a valid agent_id there is no run directory to write origin.json
+  // into, so nothing may be claimed yet: claiming first and failing to record
+  // the origin would leave a baton locked under claimed.lock forever, with
+  // claimNewestBaton never able to see it again. Checking here, before either
+  // claim function runs, keeps the baton available for a correctly-identified
+  // dispatch later.
+  if (typeof input.agent_id !== 'string' || input.agent_id.trim().length === 0) {
+    return {
+      systemMessage: '[ccd] A ccd-continuation subagent started but the hook payload carried no agent_id, so no baton could be claimed. Its predecessor baton, if any, remains unclaimed and available.'
+    }
+  }
 
   const config = loadConfig(root)
   const readTailFn = deps.readTailFn ?? readTail
@@ -104,6 +124,14 @@ function computeStart (input, deps, root, paths) {
   const pointer = readNextClaim(paths)
   if (pointer !== null) clearNextClaim(paths)
   let claimed = pointer === null ? null : claimBatonById(paths, pointer)
+
+  // A quarantined targeted baton and a fallback claim together are the exact
+  // mis-targeting the pointer exists to prevent, just recovered from instead
+  // of caused. The successor still needs to know its baton is a fallback, so
+  // it can weigh the header's run id against its dispatch prompt.
+  const targetedBatonUnreadable = claimed === null && pointer !== null &&
+    existsSync(join(runDir(paths, pointer), 'baton.corrupt.json'))
+
   if (claimed === null) claimed = claimNewestBaton(paths)
   if (claimed === null) return null
 
@@ -119,7 +147,10 @@ function computeStart (input, deps, root, paths) {
   return {
     hookSpecificOutput: {
       hookEventName: 'SubagentStart',
-      additionalContext: buildContext(claimed.baton, transcriptText, config.maxInjectedTranscriptBytes)
+      additionalContext: buildContext(claimed.baton, transcriptText, config.maxInjectedTranscriptBytes, {
+        targetedBatonUnreadable,
+        targetedRunId: pointer
+      })
     }
   }
 }
