@@ -5,6 +5,8 @@ import { promisify } from 'node:util'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { ccdPaths } from '../lib/paths.mjs'
+import { enable } from '../lib/gate.mjs'
 
 const STOP = resolve('hooks/subagent-stop.mjs')
 const START = resolve('hooks/subagent-start.mjs')
@@ -29,6 +31,9 @@ function project () {
   writeFileSync(join(root, 'src', 'inject', 'a.c'), 'int main(void){return 0;}\n')
   run('add', '-A')
   run('commit', '-q', '-m', 'init')
+  // These end-to-end tests exercise the relay, not the gate, so the fixture
+  // arms the project the same way the unit-test fixtures do.
+  enable(ccdPaths(root))
   return root
 }
 
@@ -149,4 +154,31 @@ test('six concurrent refusals all reach the ledger', async () => {
   const ledger = JSON.parse(readFileSync(join(root, '.ccd', 'risk-ledger.json'), 'utf8'))
   assert.equal(ledger.areas['src/inject/**'].kills, 6, 'clustered refusals are the design case')
   assert.equal(ledger.areas['src/inject/**'].attempts, 6)
+})
+
+// --- Gate: end to end, a real child process on an unarmed project ---
+
+test('an unarmed project produces no output from either hook, end to end', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccd-e2e-gate-'))
+  const run = (...args) => execFileSync('git', args, { cwd: root, stdio: 'pipe' })
+  run('init', '-q')
+  run('config', 'user.email', 't@t.t')
+  run('config', 'user.name', 'T')
+  mkdirSync(join(root, 'src', 'inject'), { recursive: true })
+  writeFileSync(join(root, 'src', 'inject', 'a.c'), 'int main(void){return 0;}\n')
+  run('add', '-A')
+  run('commit', '-q', '-m', 'init')
+  // No enable(): the gate stays off, unlike every project() fixture above.
+
+  const transcript = refusedTranscript(root)
+  const stop = runHook(STOP, {
+    agent_id: 'gated-e2e',
+    agent_type: 'general-purpose',
+    agent_transcript_path: transcript
+  }, root)
+  assert.equal(stop, null)
+  assert.equal(existsSync(join(root, '.ccd')), false)
+
+  const start = runHook(START, { agent_type: 'ccd-continuation', agent_id: 'succ-gated' }, root)
+  assert.equal(start, null)
 })

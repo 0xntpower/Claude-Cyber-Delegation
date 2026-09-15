@@ -1,10 +1,23 @@
 import { readFileSync } from 'node:fs'
 import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
+import { isEnabled, shouldAnnounce } from '../lib/gate.mjs'
 import { readTail } from '../lib/classify.mjs'
 import { claimBatonById, claimNewestBaton, clearNextClaim, readNextClaim, writeOrigin } from '../lib/baton.mjs'
 import { MAX_PATHSPEC } from '../lib/gitstate.mjs'
 
 const CONTINUATION = 'ccd-continuation'
+const ARMED_NOTICE = '[ccd] Cyber Delegation is armed in this project (.ccd/enabled). Run /ccd-disable to turn it off.'
+
+// A sticky enable must never be invisible. Wraps whatever the rest of the
+// hook produced (including null) with a once-per-session notice, so a
+// non-continuation dispatch that would otherwise emit nothing still tells
+// the user the plugin is live.
+function withAnnounce (paths, sessionId, result, announceFn) {
+  if (!announceFn(paths, sessionId)) return result
+  if (result === null) return { systemMessage: ARMED_NOTICE }
+  const existing = result.systemMessage
+  return { ...result, systemMessage: existing ? `${ARMED_NOTICE}\n${existing}` : ARMED_NOTICE }
+}
 
 function block (title, body) {
   return `## ${title}\n\n${body}\n`
@@ -69,11 +82,12 @@ function buildContext (baton, transcriptText, capBytes) {
   )
 }
 
-export function handleStart (input, deps = {}) {
+// Everything the plugin actually does, gated on the project being armed.
+// Kept as a separate function so `handleStart` can wrap its single return
+// value with the once-per-session announce notice in one place.
+function computeStart (input, deps, root, paths) {
   if (input.agent_type !== CONTINUATION) return null
 
-  const root = deps.root ?? findProjectRoot(process.cwd())
-  const paths = ccdPaths(root)
   const config = loadConfig(root)
   const readTailFn = deps.readTailFn ?? readTail
 
@@ -108,6 +122,22 @@ export function handleStart (input, deps = {}) {
       additionalContext: buildContext(claimed.baton, transcriptText, config.maxInjectedTranscriptBytes)
     }
   }
+}
+
+export function handleStart (input, deps = {}) {
+  const root = deps.root ?? findProjectRoot(process.cwd())
+  const paths = ccdPaths(root)
+  const isEnabledFn = deps.isEnabledFn ?? isEnabled
+  const announceFn = deps.announceFn ?? shouldAnnounce
+
+  // The gate is the first thing checked once the project root is known, and
+  // it returns before a transcript is read or a baton is claimed. This runs
+  // for every subagent start, not only ccd-continuation, so an unarmed
+  // project pays only for a directory walk and a stat on every dispatch.
+  if (!isEnabledFn(paths)) return null
+
+  const result = computeStart(input, deps, root, paths)
+  return withAnnounce(paths, input.session_id, result, announceFn)
 }
 
 function main () {

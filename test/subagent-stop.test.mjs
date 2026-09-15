@@ -5,11 +5,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleStop } from '../hooks/subagent-stop.mjs'
 import { ccdPaths } from '../lib/paths.mjs'
+import { enable } from '../lib/gate.mjs'
 import { writeOrigin } from '../lib/baton.mjs'
 
+// The relay tests below are about the gated behaviour, not the gate itself,
+// so the fixture arms the project by default. The gate's own on/off and
+// announce behaviour gets its own tests further down.
 function deps (overrides = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ccd-stop-'))
   mkdirSync(join(root, '.git'))
+  enable(ccdPaths(root))
   return {
     root,
     readTailFn: () => '{"model":"claude-opus-4-8","stop_reason":"refusal"}',
@@ -204,4 +209,73 @@ test('an untruncated file set says nothing about truncation', () => {
   const d = deps()
   const out = handleStop({ agent_id: 'trunc-2', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
   assert.doesNotMatch(out.systemMessage, /truncat/i)
+})
+
+// --- Gate: the hook does no work at all in an unarmed project ---
+
+test('an unarmed project does no work and emits nothing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccd-stop-gate-'))
+  mkdirSync(join(root, '.git'))
+  // No enable() call: this project is never armed.
+  let touched = false
+  const out = handleStop(
+    { agent_id: 'gated-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' },
+    {
+      root,
+      readTailFn: () => { touched = true; return '{"model":"claude-opus-4-8","stop_reason":"refusal"}' },
+      classifyFn: () => { touched = true; return 'refusal' },
+      extractFn: () => { touched = true; return ['src/inject/a.c'] },
+      gitStateFn: () => { touched = true; return { files: [], status: '', diffstat: '', truncated: false } }
+    }
+  )
+  assert.equal(out, null)
+  assert.equal(touched, false, 'the gate must return before any transcript read, classification, or git call')
+  assert.equal(existsSync(ccdPaths(root).ledger), false)
+})
+
+test('an armed project still produces a baton on refusal, so the gate did not break the relay', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccd-stop-gate-'))
+  mkdirSync(join(root, '.git'))
+  enable(ccdPaths(root))
+  const out = handleStop(
+    { agent_id: 'gated-2', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' },
+    {
+      root,
+      readTailFn: () => '{"model":"claude-opus-4-8","stop_reason":"refusal"}',
+      classifyFn: () => 'refusal',
+      extractFn: () => ['src/inject/a.c'],
+      gitStateFn: () => ({ files: ['src/inject/a.c'], status: ' M src/inject/a.c', diffstat: '1 file changed', truncated: false })
+    }
+  )
+  assert.match(out.systemMessage, /refused/i)
+  const baton = JSON.parse(readFileSync(join(ccdPaths(root).runs, 'gated-2', 'baton.json'), 'utf8'))
+  assert.equal(baton.attempt, 1)
+})
+
+// --- Gate: once-per-session armed notice ---
+
+test('the first hook fire of a session in an armed project announces itself', () => {
+  const d = deps({ classifyFn: () => 'normal' })
+  const out = handleStop({ agent_id: 'announce-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl', session_id: 'sess-1' }, d)
+  assert.match(out.systemMessage, /armed/i)
+})
+
+test('a normal outcome in an armed project emits nothing without a session id', () => {
+  const d = deps({ classifyFn: () => 'normal' })
+  const out = handleStop({ agent_id: 'announce-nosession', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
+  assert.equal(out, null)
+})
+
+test('a second hook fire in the same session does not announce again', () => {
+  const d = deps({ classifyFn: () => 'normal' })
+  handleStop({ agent_id: 'announce-2', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl', session_id: 'sess-2' }, d)
+  const out = handleStop({ agent_id: 'announce-3', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl', session_id: 'sess-2' }, d)
+  assert.equal(out, null)
+})
+
+test('the armed notice is prepended to an existing systemMessage rather than replacing it', () => {
+  const d = deps()
+  const out = handleStop({ agent_id: 'announce-4', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl', session_id: 'sess-4' }, d)
+  assert.match(out.systemMessage, /armed/i)
+  assert.match(out.systemMessage, /refused/i)
 })

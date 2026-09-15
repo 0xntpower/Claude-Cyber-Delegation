@@ -5,6 +5,10 @@ description: Use when dispatching subagents on security-adjacent work, when a su
 
 # Cyber Delegation
 
+**Arm the plugin first.** None of this fires until `/ccd-enable` has been run
+in this project. The gate is off by default and sticky once on. Check with
+`/ccd-status`.
+
 Opus 5 is the default because it produces better work. Opus 4.6 is damage
 control, not a preference. Every decision starts from "try Opus 5" and needs
 evidence to depart from it.

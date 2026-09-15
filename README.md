@@ -67,9 +67,20 @@ so a thin score reads as thin rather than as safe.
 
 ## Status
 
-The hooks run on every subagent stop wherever the plugin is installed. An
-explicit per-project opt-in is designed but not built yet, so install this where
-you want it active.
+Off by default. Installing the plugin changes nothing until you arm it, per
+project:
+
+```
+/ccd-enable
+```
+
+That creates `.ccd/enabled`. Both hooks check for it first, before reading a
+transcript, loading the ledger, or invoking git, so an unarmed project pays
+only for a directory stat. The setting is sticky: it survives across sessions
+until `/ccd-disable` removes the marker. The first hook fire of a session in
+an armed project always prints a one-line notice, even when the outcome is
+otherwise silent, so a sticky enable never goes unnoticed. Check the current
+state, including the risk ledger summary, with `/ccd-status`.
 
 ## Test
 
@@ -77,4 +88,4 @@ you want it active.
 npm test
 ```
 
-164 tests, no runtime dependencies.
+207 tests, no runtime dependencies.

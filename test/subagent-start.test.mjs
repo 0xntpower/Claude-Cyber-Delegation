@@ -5,12 +5,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleStart } from '../hooks/subagent-start.mjs'
 import { ccdPaths } from '../lib/paths.mjs'
+import { enable } from '../lib/gate.mjs'
 import { writeBaton, readOrigin, writeNextClaim, readNextClaim, claimNewestBaton } from '../lib/baton.mjs'
 import { utimesSync } from 'node:fs'
 
+// The relay tests below are about the gated behaviour, not the gate itself,
+// so the fixture arms the project by default. The gate's own on/off and
+// announce behaviour gets its own tests further down.
 function fixture () {
   const root = mkdtempSync(join(tmpdir(), 'ccd-start-'))
   mkdirSync(join(root, '.git'))
+  enable(ccdPaths(root))
   return root
 }
 
@@ -206,4 +211,58 @@ test('an untruncated baton says nothing about truncation', () => {
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-7' }, { root, readTailFn: () => 'T' })
   const ctx = out.hookSpecificOutput.additionalContext
   assert.doesNotMatch(ctx, /truncat/i)
+})
+
+// --- Gate: the hook does no work at all in an unarmed project ---
+
+test('an unarmed project does no work and emits nothing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccd-start-gate-'))
+  mkdirSync(join(root, '.git'))
+  // No enable() call: this project is never armed.
+  writeBaton(ccdPaths(root), 'dead-unarmed', { ...BATON, runId: 'dead-unarmed' })
+  let touched = false
+  const out = handleStart(
+    { agent_type: 'ccd-continuation', agent_id: 'succ-unarmed' },
+    { root, readTailFn: () => { touched = true; return 'SHOULD NOT BE READ' } }
+  )
+  assert.equal(out, null)
+  assert.equal(touched, false, 'the gate must return before any transcript read or baton claim')
+  // Nothing was claimed: the baton is still there for later, once armed.
+  assert.notEqual(claimNewestBaton(ccdPaths(root)), null)
+})
+
+test('an armed project still claims a baton and injects context, so the gate did not break the relay', () => {
+  const root = fixture()
+  writeBaton(ccdPaths(root), 'dead-armed', { ...BATON, runId: 'dead-armed' })
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-armed' }, { root, readTailFn: () => 'BODY' })
+  assert.match(out.hookSpecificOutput.additionalContext, /dead-armed/)
+})
+
+// --- Gate: once-per-session armed notice ---
+
+test('the first hook fire of a session in an armed project announces itself', () => {
+  const root = fixture()
+  const out = handleStart({ agent_type: 'general-purpose', agent_id: 'x', session_id: 'sess-1' }, { root })
+  assert.match(out.systemMessage, /armed/i)
+})
+
+test('a non-continuation dispatch in an armed project emits nothing without a session id', () => {
+  const root = fixture()
+  const out = handleStart({ agent_type: 'general-purpose', agent_id: 'x' }, { root })
+  assert.equal(out, null)
+})
+
+test('a second hook fire in the same session does not announce again', () => {
+  const root = fixture()
+  handleStart({ agent_type: 'general-purpose', agent_id: 'x1', session_id: 'sess-2' }, { root })
+  const out = handleStart({ agent_type: 'general-purpose', agent_id: 'x2', session_id: 'sess-2' }, { root })
+  assert.equal(out, null)
+})
+
+test('the armed notice is prepended to a continuation context rather than replacing it', () => {
+  const root = fixture()
+  writeBaton(ccdPaths(root), 'dead-8', { ...BATON, runId: 'dead-8' })
+  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-8', session_id: 'sess-3' }, { root, readTailFn: () => 'T' })
+  assert.match(out.systemMessage, /armed/i)
+  assert.ok(out.hookSpecificOutput.additionalContext.length > 0)
 })

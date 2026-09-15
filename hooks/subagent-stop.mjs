@@ -1,11 +1,24 @@
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
+import { isEnabled, shouldAnnounce } from '../lib/gate.mjs'
 import { classifyTail, readTail } from '../lib/classify.mjs'
 import { extractEditedPaths } from '../lib/transcript.mjs'
 import { gitState, MAX_PATHSPEC } from '../lib/gitstate.mjs'
 import { areaForPaths, loadLedger, recordOutcome, saveLedger, stalenessFor, withLedgerLock } from '../lib/ledger.mjs'
 import { readOrigin, runDir, writeBaton } from '../lib/baton.mjs'
+
+const ARMED_NOTICE = '[ccd] Cyber Delegation is armed in this project (.ccd/enabled). Run /ccd-disable to turn it off.'
+
+// A sticky enable must never be invisible. Wraps whatever the rest of the
+// hook produced (including null) with a once-per-session notice, so an
+// otherwise-silent normal completion still tells the user the plugin is live.
+function withAnnounce (paths, sessionId, result, announceFn) {
+  if (!announceFn(paths, sessionId)) return result
+  if (result === null) return { systemMessage: ARMED_NOTICE }
+  const existing = result.systemMessage
+  return { ...result, systemMessage: existing ? `${ARMED_NOTICE}\n${existing}` : ARMED_NOTICE }
+}
 
 const MODEL_IN_TAIL = /"model"\s*:\s*"(claude-[a-z0-9-]+(?:\[[a-z0-9]+\])?)"/gi
 
@@ -43,9 +56,11 @@ function handoffReport (input, attempt, files, state) {
   return lines.join('\n')
 }
 
-export function handleStop (input, deps = {}) {
-  if (input.stop_hook_active === true) return null
-
+// Everything the plugin actually does, gated on the project being armed.
+// Kept as a separate function so `handleStop` can wrap its single return
+// value with the once-per-session announce notice in one place instead of
+// at every exit point below.
+function computeStop (input, deps, root, paths) {
   // Without an agent id there is no run directory, so the origin read throws,
   // the hook exits 0 with empty stdout, and the refusal disappears silently.
   // Say so instead, and say it before anything has been written.
@@ -55,8 +70,6 @@ export function handleStop (input, deps = {}) {
     }
   }
 
-  const root = deps.root ?? findProjectRoot(process.cwd())
-  const paths = ccdPaths(root)
   const config = loadConfig(root)
   const readTailFn = deps.readTailFn ?? readTail
   const classifyFn = deps.classifyFn ?? classifyTail
@@ -147,6 +160,23 @@ export function handleStop (input, deps = {}) {
   return {
     systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} was refused by guardrails (attempt ${attempt}). Baton written to .ccd/runs/${input.agent_id}/. Dispatch ccd-continuation with this run id. Do not read the refused output.${staleNote}${truncNote}`
   }
+}
+
+export function handleStop (input, deps = {}) {
+  if (input.stop_hook_active === true) return null
+
+  const root = deps.root ?? findProjectRoot(process.cwd())
+  const paths = ccdPaths(root)
+  const isEnabledFn = deps.isEnabledFn ?? isEnabled
+  const announceFn = deps.announceFn ?? shouldAnnounce
+
+  // The gate is the first thing checked once the project root is known, and
+  // it returns before a transcript is read, the ledger is loaded, or git is
+  // invoked. An unarmed project pays only for a directory walk and a stat.
+  if (!isEnabledFn(paths)) return null
+
+  const result = computeStop(input, deps, root, paths)
+  return withAnnounce(paths, input.session_id, result, announceFn)
 }
 
 function main () {

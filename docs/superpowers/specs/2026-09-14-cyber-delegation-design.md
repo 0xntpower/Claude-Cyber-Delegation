@@ -214,10 +214,16 @@ lib/
   gitstate.mjs           git state scoped by pathspec
   ledger.mjs             risk scores, evidence, staleness
   baton.mjs              baton write, atomic claim, origin linkage
+  gate.mjs               .ccd/enabled marker, once-per-session announce
+commands/
+  ccd-enable.md          arm the plugin for this project
+  ccd-disable.md         disarm it
+  ccd-status.md          armed state plus ledger summary, including staleness
 skills/
   cyber-delegation/SKILL.md
 scripts/
   probe-1m.mjs           install-time [1m] capability probe
+  gate.mjs               CLI backing the three commands above
 test/                    node:test suites, one per lib module
 ```
 
@@ -232,11 +238,46 @@ Runtime state lives in the project at `.ccd/`:
 
 ```
 .ccd/
+  enabled                ISO timestamp, presence is the opt-in gate
+  announced/<session_id> once-per-session marker for the armed notice
   config.json            ladder, attempt budget, probed 1m support,
                          stale_after_dispatches, stale_after_days
   risk-ledger.json       scores and evidence, written by hooks
   runs/<agent_id>/       batons, captured git state, transcript pointers
 ```
+
+### Gate
+
+Both hooks ran on every subagent stop and start in every project the plugin
+was installed in, whether or not that project was doing anything
+security-adjacent. `subagent-stop.mjs` alone read up to 256 KB of transcript
+tail and shelled out to git on each one, cost imposed on ordinary development
+that had nothing to do with guardrails. `.ccd/enabled` is the fix. Its
+presence is the gate, checked in both hooks as the first thing after parsing
+stdin and resolving the project root, before a transcript is read, the ledger
+is loaded, or git is invoked. In `subagent-stop.mjs` it sits alongside the
+existing `stop_hook_active` short-circuit. Both guards return before any
+expensive work.
+
+The setting is sticky per project rather than per session. Forgetting to
+enable loses a refused agent's work, while forgetting to disable only records
+ledger entries in a project that has stopped being risky. Sticky is the safer
+direction to fail in.
+
+A sticky setting that produces no output is invisible. The first hook fire of
+a given session in an armed project emits a one-line `systemMessage` saying
+so, even when the hook would otherwise emit nothing on a normal outcome.
+`.ccd/announced/<session_id>` tracks which sessions have already been told,
+created with the same atomic `openSync(path, 'wx')` the baton claim uses, so
+two hooks racing on the first fire of a session cannot both announce. A
+missing `session_id` skips the notice rather than crashing.
+
+`/ccd-enable`, `/ccd-disable`, and `/ccd-status` are the three commands,
+backed by `scripts/gate.mjs`. `/ccd-status` also closes a gap this design
+otherwise left open. Staleness was documented to surface "in its status
+output and in the refusal `systemMessage`," but only the refusal path ever
+existed. `/ccd-status` now reports it too, reusing `stalenessFor` from
+`lib/ledger.mjs` rather than a second implementation of the same check.
 
 ## Components
 
