@@ -2,6 +2,19 @@
 
 A Claude Code plugin. When a subagent is refused by model guardrails, it captures what that agent touched and hands the work to a successor pinned to Opus 4.6.
 
+## Install
+
+```
+/plugin marketplace add 0xntpower/Claude-Cyber-Delegation
+/plugin install cyber-delegation@cyber-delegation
+```
+
+Then arm it in a project that needs it with `/ccd-enable`. Installing alone
+does nothing.
+
+To run from a local clone instead, point the marketplace at the checkout:
+`/plugin marketplace add /path/to/Claude-Cyber-Delegation`.
+
 ## How it works
 This Claude code plugin will have your main agent
 estimate the likelyhood of different parts in the upcming implementation plan to trigger
