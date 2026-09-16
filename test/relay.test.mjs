@@ -241,3 +241,51 @@ test('hooks.json restricts SubagentStart to continuations and relays through Pos
   assert.match(cfg.hooks.PostToolUse[0].matcher, /Agent/)
   assert.match(cfg.hooks.PostToolUse[0].hooks[0].command, /agent-post\.mjs/)
 })
+
+// The frame layout below is the one sampled transcripts actually carry: the
+// system frame announcing the platform's handling sits one line *ahead* of the
+// synthetic refusal frame it describes, not behind it.
+test('a recovery announced before the refusal frame still counts as recovered', () => {
+  const tail = frames(
+    { type: 'assistant', message: { model: 'claude-opus-5', stop_reason: 'tool_use' } },
+    { type: 'system', subtype: 'model_refusal_fallback' },
+    { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } },
+    { type: 'assistant', message: { model: 'claude-opus-4-8', stop_reason: 'end_turn' } }
+  )
+  assert.equal(inspectTail(tail).outcome, 'normal',
+    'the platform caught this turn, so no baton is owed for it')
+})
+
+test('a kill announced before the refusal frame is still a kill', () => {
+  const tail = frames(
+    { type: 'assistant', message: { model: 'claude-opus-5', stop_reason: 'tool_use' } },
+    { type: 'system', subtype: 'model_refusal_no_fallback' },
+    { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } }
+  )
+  const seen = inspectTail(tail)
+  assert.equal(seen.outcome, 'refusal')
+  assert.equal(seen.category, 'cyber')
+})
+
+// Two refusals in a row, the first recovered. The marker for the first sits
+// two frames ahead of the second, and reading it as the second's would drop a
+// real kill's baton and abandon the work it was holding.
+test('a preceding marker belonging to an earlier refusal is not borrowed', () => {
+  const tail = frames(
+    { type: 'system', subtype: 'model_refusal_fallback' },
+    { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } },
+    { type: 'assistant', message: { model: 'claude-opus-4-8', stop_reason: 'tool_use' } },
+    { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } }
+  )
+  assert.equal(inspectTail(tail).outcome, 'refusal')
+})
+
+test('a later refusal does not reach past itself for a marker', () => {
+  const tail = frames(
+    { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } },
+    { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } },
+    { type: 'system', subtype: 'model_refusal_fallback' }
+  )
+  assert.equal(inspectTail(tail).outcome, 'normal',
+    'the marker directly after the last refusal is that refusal\'s own')
+})
