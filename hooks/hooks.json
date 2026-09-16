@@ -14,11 +14,23 @@
     ],
     "SubagentStart": [
       {
-        "matcher": "*",
+        "matcher": "ccd-continuation",
         "hooks": [
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.mjs\"",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-post.mjs\"",
             "async": false
           }
         ]

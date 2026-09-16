@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleStart } from '../hooks/subagent-start.mjs'
@@ -17,6 +17,16 @@ function fixture () {
   mkdirSync(join(root, '.git'))
   enable(ccdPaths(root))
   return root
+}
+
+
+// The evidence moved out of the injected text and into a file, because the
+// harness silently truncates additionalContext to 8000 characters and 200
+// lines. Assertions about the file list, the diff and the transcript belong
+// against the file now; assertions about run identity and the rules belong
+// against the injected brief.
+function handoff (root, runId) {
+  return readFileSync(join(ccdPaths(root).runs, runId, 'handoff.md'), 'utf8')
 }
 
 const BATON = {
@@ -49,10 +59,12 @@ test('attempt one injects the full transcript', () => {
     { root, readTailFn: () => 'FULL TRANSCRIPT BODY' }
   )
   const ctx = out.hookSpecificOutput.additionalContext
+  const body = handoff(root, 'dead-1')
   assert.equal(out.hookSpecificOutput.hookEventName, 'SubagentStart')
-  assert.match(ctx, /FULL TRANSCRIPT BODY/)
-  assert.match(ctx, /src\/inject\/a\.c/)
+  assert.match(body, /FULL TRANSCRIPT BODY/)
+  assert.match(body, /src\/inject\/a\.c/)
   assert.match(ctx, /claude-opus-4-8/)
+  assert.match(ctx, /handoff\.md/, 'the brief must point at the file holding the evidence')
 })
 
 test('attempt two degrades and omits the transcript', () => {
@@ -63,9 +75,11 @@ test('attempt two degrades and omits the transcript', () => {
     { root, readTailFn: () => 'SHOULD NOT APPEAR' }
   )
   const ctx = out.hookSpecificOutput.additionalContext
+  const body = handoff(root, 'dead-2')
   assert.doesNotMatch(ctx, /SHOULD NOT APPEAR/)
-  assert.match(ctx, /degraded/i)
-  assert.match(ctx, /1 file changed/)
+  assert.doesNotMatch(body, /SHOULD NOT APPEAR/)
+  assert.match(body, /degraded/i)
+  assert.match(body, /1 file changed/)
 })
 
 test('claiming records origin so the next refusal counts attempts', () => {
@@ -104,8 +118,9 @@ test('a targeted claim beats a newer unclaimed baton', () => {
   )
   const ctx = out.hookSpecificOutput.additionalContext
   assert.match(ctx, /runA/)
-  assert.match(ctx, /src\/alpha\/a\.c/)
-  assert.doesNotMatch(ctx, /src\/beta\/b\.c/)
+  assert.doesNotMatch(ctx, /runB/)
+  assert.match(handoff(root, 'runA'), /src\/alpha\/a\.c/)
+  assert.doesNotMatch(handoff(root, 'runA'), /src\/beta\/b\.c/)
   assert.deepEqual(readOrigin(ccdPaths(root), 'succ-A'), { fromRunId: 'runA', attempt: 1 })
 })
 
@@ -125,8 +140,8 @@ test('two unclaimed batons are never conflated', () => {
   writeNextClaim(paths, 'runB')
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-B' }, { root, readTailFn: () => 'T' })
   const ctx = out.hookSpecificOutput.additionalContext
-  assert.match(ctx, /src\/beta\/b\.c/)
-  assert.doesNotMatch(ctx, /src\/alpha\/a\.c/)
+  assert.match(ctx, /runB/)
+  assert.doesNotMatch(ctx, /runA/)
   assert.equal(claimNewestBaton(paths), null, 'both batons must now be claimed, neither orphaned')
 })
 
@@ -134,7 +149,7 @@ test('with no pointer it falls back to the newest unclaimed baton', () => {
   const root = fixture()
   twoRuns(root)
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-N' }, { root, readTailFn: () => 'T' })
-  assert.match(out.hookSpecificOutput.additionalContext, /src\/beta\/b\.c/)
+  assert.match(out.hookSpecificOutput.additionalContext, /runB/)
 })
 
 test('a pointer naming a nonexistent run falls back to the newest', () => {
@@ -142,7 +157,7 @@ test('a pointer naming a nonexistent run falls back to the newest', () => {
   twoRuns(root)
   writeNextClaim(ccdPaths(root), 'runZ')
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-Z' }, { root, readTailFn: () => 'T' })
-  assert.match(out.hookSpecificOutput.additionalContext, /src\/beta\/b\.c/)
+  assert.match(out.hookSpecificOutput.additionalContext, /runB/)
 })
 
 test('a pointer naming an already-claimed run falls back to the newest', () => {
@@ -152,7 +167,7 @@ test('a pointer naming an already-claimed run falls back to the newest', () => {
   handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-1' }, { root, readTailFn: () => 'T' })
   writeNextClaim(paths, 'runA')
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-2' }, { root, readTailFn: () => 'T' })
-  assert.match(out.hookSpecificOutput.additionalContext, /src\/beta\/b\.c/)
+  assert.match(out.hookSpecificOutput.additionalContext, /runB/)
 })
 
 // --- N1: the pointer must be one-shot, even across a dry run that claims nothing ---
@@ -169,13 +184,18 @@ test('a pointer that survives a claimless dry run must not resurrect for a later
   assert.equal(dryRun, null)
 
   // runA's baton lands late, then runB is refused after it with no new pointer.
+  // The mtimes are set explicitly: two writes inside the same millisecond tie
+  // on mtimeMs, and "newest" then depends on sort stability rather than on
+  // which baton is actually newer.
   writeBaton(paths, 'runA', { ...BATON, runId: 'runA', files: ['src/alpha/a.c'] })
   writeBaton(paths, 'runB', { ...BATON, runId: 'runB', files: ['src/beta/b.c'] })
+  utimesSync(join(paths.runs, 'runA', 'baton.json'), new Date(1000), new Date(1000))
+  utimesSync(join(paths.runs, 'runB', 'baton.json'), new Date(2000), new Date(2000))
 
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-B' }, { root, readTailFn: () => 'T' })
   const ctx = out.hookSpecificOutput.additionalContext
-  assert.match(ctx, /src\/beta\/b\.c/)
-  assert.doesNotMatch(ctx, /src\/alpha\/a\.c/)
+  assert.match(ctx, /runB/)
+  assert.doesNotMatch(ctx, /runA/)
 })
 
 // --- M2: the injected block must not claim to be the whole transcript ---
@@ -183,11 +203,11 @@ test('a pointer that survives a claimless dry run must not resurrect for a later
 test('the transcript block is labelled as the final portion with its byte cap', () => {
   const root = fixture()
   writeBaton(ccdPaths(root), 'dead-5', { ...BATON, runId: 'dead-5' })
-  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-5' }, { root, readTailFn: () => 'T' })
-  const ctx = out.hookSpecificOutput.additionalContext
-  assert.match(ctx, /final portion/i)
-  assert.match(ctx, /400000 bytes/)
-  assert.doesNotMatch(ctx, /## Full transcript/i)
+  handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-5' }, { root, readTailFn: () => 'T' })
+  const body = handoff(root, 'dead-5')
+  assert.match(body, /final portion/i)
+  assert.match(body, /400000 bytes/)
+  assert.doesNotMatch(body, /## Full transcript/i)
 })
 
 // --- P2: a truncated file list must say so, not just carry the flag silently ---
@@ -199,18 +219,17 @@ test('a truncated baton mentions the truncation and names the cap', () => {
     runId: 'dead-6',
     state: { ...BATON.state, truncated: true }
   })
-  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-6' }, { root, readTailFn: () => 'T' })
-  const ctx = out.hookSpecificOutput.additionalContext
-  assert.match(ctx, /truncat/i)
-  assert.match(ctx, /500/)
+  handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-6' }, { root, readTailFn: () => 'T' })
+  const body = handoff(root, 'dead-6')
+  assert.match(body, /truncat/i)
+  assert.match(body, /500/)
 })
 
 test('an untruncated baton says nothing about truncation', () => {
   const root = fixture()
   writeBaton(ccdPaths(root), 'dead-7', { ...BATON, runId: 'dead-7' })
-  const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-7' }, { root, readTailFn: () => 'T' })
-  const ctx = out.hookSpecificOutput.additionalContext
-  assert.doesNotMatch(ctx, /truncat/i)
+  handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-7' }, { root, readTailFn: () => 'T' })
+  assert.doesNotMatch(handoff(root, 'dead-7'), /truncat/i)
 })
 
 // --- Gate: the hook does no work at all in an unarmed project ---
@@ -238,31 +257,21 @@ test('an armed project still claims a baton and injects context, so the gate did
   assert.match(out.hookSpecificOutput.additionalContext, /dead-armed/)
 })
 
-// --- Gate: once-per-session armed notice ---
+// --- Gate: the armed notice belongs to subagent-stop now ---
 
-test('the first hook fire of a session in an armed project announces itself', () => {
+// This hook is registered with a `ccd-continuation` matcher, so the harness
+// never fires it for an ordinary dispatch and it has no chance to carry a
+// once-per-session notice. `subagent-stop` keeps that job, and keeps its
+// tests for it; what matters here is that nothing is emitted by mistake.
+test('a non-continuation dispatch emits nothing even with a session id', () => {
   const root = fixture()
-  const out = handleStart({ agent_type: 'general-purpose', agent_id: 'x', session_id: 'sess-1' }, { root })
-  assert.match(out.systemMessage, /armed/i)
+  assert.equal(handleStart({ agent_type: 'general-purpose', agent_id: 'x', session_id: 'sess-1' }, { root }), null)
 })
 
-test('a non-continuation dispatch in an armed project emits nothing without a session id', () => {
-  const root = fixture()
-  const out = handleStart({ agent_type: 'general-purpose', agent_id: 'x' }, { root })
-  assert.equal(out, null)
-})
-
-test('a second hook fire in the same session does not announce again', () => {
-  const root = fixture()
-  handleStart({ agent_type: 'general-purpose', agent_id: 'x1', session_id: 'sess-2' }, { root })
-  const out = handleStart({ agent_type: 'general-purpose', agent_id: 'x2', session_id: 'sess-2' }, { root })
-  assert.equal(out, null)
-})
-
-test('the armed notice is prepended to a continuation context rather than replacing it', () => {
+test('a continuation context carries no armed notice of its own', () => {
   const root = fixture()
   writeBaton(ccdPaths(root), 'dead-8', { ...BATON, runId: 'dead-8' })
   const out = handleStart({ agent_type: 'ccd-continuation', agent_id: 'succ-8', session_id: 'sess-3' }, { root, readTailFn: () => 'T' })
-  assert.match(out.systemMessage, /armed/i)
-  assert.ok(out.hookSpecificOutput.additionalContext.length > 0)
+  assert.equal(out.systemMessage, undefined)
+  assert.match(out.hookSpecificOutput.additionalContext, /dead-8/)
 })

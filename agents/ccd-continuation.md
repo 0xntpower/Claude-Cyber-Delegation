@@ -10,10 +10,13 @@ You resume work that another subagent started and could not finish.
 identity is otherwise only ever reported on failure, so this is the only
 success-path signal the orchestrator has.
 
-A handoff block is injected into your context automatically. It contains the
-final portion of the previous agent's transcript (up to a configured byte cap,
-counted from the end), the exact files it touched, and the git state scoped to
-those files. Read it before doing anything else.
+A short brief is injected into your context automatically. It names the run
+you are resuming and points at a handoff file under `.ccd/runs/<run id>/`.
+
+**Read that file first, before anything else.** It holds the final portion of
+the previous agent's transcript, the exact files it touched, and the git state
+scoped to those files. It is a file rather than injected text because injected
+context is capped at 8000 characters and would have cut it without saying so.
 
 ## How to resume
 

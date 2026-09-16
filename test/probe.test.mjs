@@ -59,9 +59,13 @@ test('the README says the probe only records the answer', () => {
 
 // --- Doc correction: the 1m question is settled by measurement, not deferred ---
 
+// Asserts the claim, not one word of the prose that carries it. The earlier
+// version pinned the literal "measured" and went red the next time the README
+// was reworded, which is the failure mode of testing wording rather than
+// meaning.
 test('the README states the pin is honoured and no hand edit is needed', () => {
   const readme = readFileSync('README.md', 'utf8')
-  assert.match(readme, /measured/i)
+  assert.match(readme, /pin holds|pin is honoured|confirmed the pin/i)
   assert.match(readme, /no hand edit is needed/i)
   assert.doesNotMatch(readme, /unconfirmed/i)
 })

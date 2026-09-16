@@ -8,6 +8,25 @@ import { ccdPaths } from '../lib/paths.mjs'
 import { enable } from '../lib/gate.mjs'
 import { writeOrigin } from '../lib/baton.mjs'
 
+
+// Real transcript frames, matching refused transcripts sampled from disk: the
+// refusal frame reports `model: "<synthetic>"`, so the model that actually
+// refused is the last real one named before it.
+function frames (...objs) {
+  return objs.map(o => JSON.stringify(o)).join(String.fromCharCode(10))
+}
+
+function refusedTail (model, category = 'cyber') {
+  return frames(
+    { type: 'assistant', message: { model, stop_reason: 'tool_use' } },
+    { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category } } }
+  )
+}
+
+function plainTail (model) {
+  return frames({ type: 'assistant', message: { model, stop_reason: 'end_turn' } })
+}
+
 // The relay tests below are about the gated behaviour, not the gate itself,
 // so the fixture arms the project by default. The gate's own on/off and
 // announce behaviour gets its own tests further down.
@@ -17,9 +36,10 @@ function deps (overrides = {}) {
   enable(ccdPaths(root))
   return {
     root,
-    readTailFn: () => '{"model":"claude-opus-4-8","stop_reason":"refusal"}',
+    readTailFn: () => refusedTail('claude-opus-4-8'),
     classifyFn: () => 'refusal',
     extractFn: () => ['src/inject/a.c'],
+    framesExtractFn: () => ['src/inject/a.c'],
     gitStateFn: () => ({ files: ['src/inject/a.c'], status: ' M src/inject/a.c', diffstat: '1 file changed', truncated: false }),
     ...overrides
   }
@@ -104,7 +124,7 @@ test('a refusal with no attributable files still records and still emits', () =>
 })
 
 test('captures a model ID carrying a 1M context suffix', () => {
-  const d = deps({ readTailFn: () => '{"model":"claude-opus-5[1m]","stop_reason":"refusal"}' })
+  const d = deps({ readTailFn: () => refusedTail('claude-opus-5[1m]') })
   const out = handleStop({ agent_id: 'a7', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
   const baton = JSON.parse(readFileSync(join(ccdPaths(d.root).runs, 'a7', 'baton.json'), 'utf8'))
   assert.equal(baton.refusedModel, 'claude-opus-5[1m]')
@@ -115,7 +135,7 @@ test('captures a model ID carrying a 1M context suffix', () => {
 test('a rate limit leaves the ledger completely untouched', () => {
   const d = deps({
     classifyFn: () => 'rate_limit',
-    readTailFn: () => '{"model":"claude-opus-5","stop_reason":"rate_limit"}'
+    readTailFn: () => plainTail('claude-opus-5')
   })
   handleStop({ agent_id: 'rl-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
   assert.equal(existsSync(ccdPaths(d.root).ledger), false, 'a non-event must not create a ledger')
@@ -126,7 +146,7 @@ test('a rate limit does not reset the Opus 5 staleness clock', () => {
   // Establish real evidence from a genuine 4.6 refusal first.
   handleStop({ agent_id: 'real-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, {
     ...d,
-    readTailFn: () => '{"model":"claude-opus-4-6","stop_reason":"refusal"}'
+    readTailFn: () => refusedTail('claude-opus-4-6')
   })
   const before = JSON.parse(readFileSync(ccdPaths(d.root).ledger, 'utf8')).areas['src/inject/**']
   assert.equal(before.dispatchesSinceOpus5, 1)
@@ -134,7 +154,7 @@ test('a rate limit does not reset the Opus 5 staleness clock', () => {
   handleStop({ agent_id: 'rl-2', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, {
     ...d,
     classifyFn: () => 'rate_limit',
-    readTailFn: () => '{"model":"claude-opus-5","stop_reason":"rate_limit"}'
+    readTailFn: () => plainTail('claude-opus-5')
   })
   const after = JSON.parse(readFileSync(ccdPaths(d.root).ledger, 'utf8')).areas['src/inject/**']
   assert.equal(after.attempts, 1, 'a dispatch that never ran must not inflate the denominator')
@@ -173,10 +193,11 @@ test('a failed baton write says FAILED instead of claiming success', () => {
 
 test('a mid-session degrade records the later model, not the earlier one', () => {
   const d = deps({
-    readTailFn: () => [
-      '{"model":"claude-opus-5","type":"assistant"}',
-      '{"model":"claude-opus-4-8","stop_reason":"refusal"}'
-    ].join(String.fromCharCode(10))
+    readTailFn: () => frames(
+      { type: 'assistant', message: { model: 'claude-opus-5', stop_reason: 'tool_use' } },
+      { type: 'assistant', message: { model: 'claude-opus-4-8', stop_reason: 'tool_use' } },
+      { type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } }
+    )
   })
   handleStop({ agent_id: 'deg-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }, d)
   const baton = JSON.parse(readFileSync(join(ccdPaths(d.root).runs, 'deg-1', 'baton.json'), 'utf8'))
@@ -222,7 +243,7 @@ test('an unarmed project does no work and emits nothing', () => {
     { agent_id: 'gated-1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' },
     {
       root,
-      readTailFn: () => { touched = true; return '{"model":"claude-opus-4-8","stop_reason":"refusal"}' },
+      readTailFn: () => { touched = true; return refusedTail('claude-opus-4-8') },
       classifyFn: () => { touched = true; return 'refusal' },
       extractFn: () => { touched = true; return ['src/inject/a.c'] },
       gitStateFn: () => { touched = true; return { files: [], status: '', diffstat: '', truncated: false } }
@@ -241,7 +262,7 @@ test('an armed project still produces a baton on refusal, so the gate did not br
     { agent_id: 'gated-2', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' },
     {
       root,
-      readTailFn: () => '{"model":"claude-opus-4-8","stop_reason":"refusal"}',
+      readTailFn: () => refusedTail('claude-opus-4-8'),
       classifyFn: () => 'refusal',
       extractFn: () => ['src/inject/a.c'],
       gitStateFn: () => ({ files: ['src/inject/a.c'], status: ' M src/inject/a.c', diffstat: '1 file changed', truncated: false })

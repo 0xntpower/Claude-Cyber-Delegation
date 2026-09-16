@@ -81,9 +81,13 @@ test('a refusal followed by a continuation start completes the relay', () => {
     agent_id: 'succ-1'
   }, root)
   const ctx = start.hookSpecificOutput.additionalContext
-  assert.match(ctx, /src\/inject\/a\.c/)
   assert.match(ctx, /claude-opus-4-8/)
-  assert.match(ctx, /stop_reason/)
+  assert.match(ctx, /handoff\.md/, 'the brief points at the file rather than carrying the evidence')
+  // The evidence itself is on disk, uncapped, because the harness truncates
+  // injected context to 8000 characters and 200 lines without saying so.
+  const body = readFileSync(join(root, '.ccd', 'runs', 'dead-1', 'handoff.md'), 'utf8')
+  assert.match(body, /src\/inject\/a\.c/)
+  assert.match(body, /stop_reason/)
 })
 
 test('a malformed stdin payload exits cleanly', () => {

@@ -18,13 +18,17 @@ assumption into data about that code area.
 
 ## Rule 1: a refused subagent
 
-When a subagent fails with a guardrail error:
+A refusal announces itself. When a subagent is refused, a `[ccd]` block
+arrives in your context automatically, naming the run and the exact commands.
+You do not have to watch for it, and you do not have to have this skill loaded
+for it to arrive. Follow it:
 
-1. **Do not read its output.** That payload provably tripped a classifier, and
-   your context is the one that cannot be recovered. The platform gives you
-   status and error text only, which is all you need.
+1. **Do not read the refused agent's output.** That payload provably tripped a
+   classifier, and your context is the one that cannot be recovered. The
+   platform already withholds the refused content and gives you status and
+   error text only, which is all you need.
 2. **Write the run id to `.ccd/next-claim` before you dispatch.** The `[ccd]`
-   message names the run. One line, the run id, nothing else:
+   block gives you the line to run. One line, the run id, nothing else:
 
    ```bash
    printf '%s' 'dead-1' > .ccd/next-claim
@@ -38,13 +42,11 @@ When a subagent fails with a guardrail error:
    run's diff while its own baton is orphaned. In a shared working tree that
    means confidently editing the wrong files.
 
-3. Dispatch `ccd-continuation`. Pass the run id in the prompt for the reader's
-   benefit and nothing else. The transcript, the file list, and the scoped git
-   state are injected into that agent automatically from the baton the pointer
-   selected.
-4. A rate limit is not a guardrail refusal. Its remedy is waiting. The `[ccd]`
-   message tells you which one happened. Nothing is recorded in the ledger for
-   a rate limit, because the dispatch never ran.
+3. Dispatch `ccd-continuation`, one run at a time, naming the run id in the
+   prompt. Its brief and its handoff file are injected and written for it
+   automatically; you never handle the payload.
+4. A rate limit is not a guardrail refusal. Its remedy is waiting. Nothing is
+   recorded in the ledger for a rate limit, because the dispatch never ran.
 5. If the `[ccd]` message says the capture FAILED, do not dispatch a
    continuation. There is no baton to claim. The refused agent's work, if any,
    is still in the working tree.

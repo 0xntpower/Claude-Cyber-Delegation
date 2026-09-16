@@ -45,8 +45,13 @@ test('ccd-continuation does not claim to receive the full transcript', () => {
 })
 
 test('ccd-continuation says it receives a capped final portion instead', () => {
-  assert.match(frontmatter('ccd-continuation').body, /final portion/i)
-  assert.match(frontmatter('ccd-continuation').body, /byte cap/i)
+  const body = frontmatter('ccd-continuation').body
+  assert.match(body, /final portion/i)
+  assert.match(body, /capped/i)
+  // The evidence is a file now, not injected text, and the agent has to be
+  // told to open it or it will work from the brief alone.
+  assert.match(body, /\.ccd\/runs\//)
+  assert.match(body, /read that file first/i)
 })
 
 // --- N3: the successor must be told to check it got the right run ---

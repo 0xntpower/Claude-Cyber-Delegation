@@ -2,8 +2,8 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ccdPaths, findProjectRoot, loadConfig } from '../lib/paths.mjs'
 import { isEnabled, shouldAnnounce } from '../lib/gate.mjs'
-import { classifyTail, readTail } from '../lib/classify.mjs'
-import { extractEditedPaths } from '../lib/transcript.mjs'
+import { inspectFrames, modelFromFrames, parseFrames, readTail } from '../lib/classify.mjs'
+import { extractEditedPaths, extractEditedPathsFromFrames } from '../lib/transcript.mjs'
 import { gitState, MAX_PATHSPEC } from '../lib/gitstate.mjs'
 import { areaForPaths, loadLedger, recordOutcome, saveLedger, stalenessFor, withLedgerLock } from '../lib/ledger.mjs'
 import { readOrigin, runDir, writeBaton } from '../lib/baton.mjs'
@@ -18,18 +18,6 @@ function withAnnounce (paths, sessionId, result, announceFn) {
   if (result === null) return { systemMessage: ARMED_NOTICE }
   const existing = result.systemMessage
   return { ...result, systemMessage: existing ? `${ARMED_NOTICE}\n${existing}` : ARMED_NOTICE }
-}
-
-const MODEL_IN_TAIL = /"model"\s*:\s*"(claude-[a-z0-9-]+(?:\[[a-z0-9]+\])?)"/gi
-
-// The LAST match, not the first. The platform degrades Opus 5 to 4.8 mid-session
-// as a matter of course, so the first model named in a 256KB tail is often the
-// pre-degrade one while the refusal came from the model that replaced it.
-function modelFromTranscript (tailText) {
-  const matches = String(tailText ?? '').matchAll(MODEL_IN_TAIL)
-  let last = null
-  for (const match of matches) last = match[1]
-  return last === null ? 'unknown' : last
 }
 
 function handoffReport (input, attempt, files, state) {
@@ -72,20 +60,23 @@ function computeStop (input, deps, root, paths) {
 
   const config = loadConfig(root)
   const readTailFn = deps.readTailFn ?? readTail
-  const classifyFn = deps.classifyFn ?? classifyTail
   const extractFn = deps.extractFn ?? extractEditedPaths
+  const framesExtractFn = deps.framesExtractFn ?? extractEditedPathsFromFrames
   const gitStateFn = deps.gitStateFn ?? gitState
 
   const transcript = input.agent_transcript_path
 
-  // Read the tail exactly once. It feeds both classification and model
-  // extraction, and the model is what gives the ledger its per-model evidence
-  // and its "has Opus 5 been tried here" signal.
+  // Read the tail exactly once, parse it exactly once. The frames feed
+  // classification, the model that gives the ledger its per-model evidence,
+  // and — on the ordinary path — the file list too.
   const tail = readTailFn(transcript, config.transcriptTailBytes)
-  const outcome = classifyFn(tail)
-  const model = modelFromTranscript(tail)
-  const files = extractFn(transcript, root)
-  const area = areaForPaths(files)
+  const frames = parseFrames(tail)
+  const inspected = inspectFrames(frames, tail)
+  const outcome = deps.classifyFn === undefined ? inspected.outcome : deps.classifyFn(frames, tail)
+  // The category belongs to the refusal frame the inspection found. An
+  // injected classifier that disagrees with it does not get to keep it.
+  const category = outcome === 'refusal' ? inspected.category : null
+  const model = modelFromFrames(frames)
 
   // A rate limit is not a refusal, and it is not evidence either. The dispatch
   // never ran. Recording it would inflate the attempts denominator with a
@@ -97,12 +88,21 @@ function computeStop (input, deps, root, paths) {
     }
   }
 
+  // Only a refusal earns the whole-file read. Its file list becomes the git
+  // pathspec a successor inherits, so it has to be complete. An ordinary
+  // completion feeds nothing but the ledger's per-area success counter, and
+  // takes the already-parsed tail instead of re-reading the transcript.
+  const files = outcome === 'refusal'
+    ? extractFn(transcript, root)
+    : framesExtractFn(frames, root)
+  const area = areaForPaths(files)
+
   // Read-modify-write under a lock. Clustered concurrent refusals are the
   // design case, and unsynchronised writers measurably lose half of them.
   let ledger = null
   withLedgerLock(paths, () => {
     ledger = loadLedger(paths.ledger)
-    recordOutcome(ledger, { area, outcome, model, agentType: input.agent_type })
+    recordOutcome(ledger, { area, outcome, model, agentType: input.agent_type, category })
     saveLedger(paths.ledger, ledger)
   })
 
@@ -138,6 +138,7 @@ function computeStop (input, deps, root, paths) {
     area,
     state,
     attempt,
+    category,
     nextModel: config.ladder[0],
     refusedModel: model,
     at: new Date().toISOString()
@@ -165,7 +166,7 @@ function computeStop (input, deps, root, paths) {
     : ''
 
   return {
-    systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} was refused by guardrails (attempt ${attempt}). Baton written to .ccd/runs/${input.agent_id}/. Dispatch ccd-continuation with this run id. Do not read the refused output.${staleNote}${truncNote}`
+    systemMessage: `[ccd] ${input.agent_type ?? 'subagent'} ${input.agent_id} was refused by ${category === null ? 'guardrails' : `${category} guardrails`} (attempt ${attempt}). Baton written to .ccd/runs/${input.agent_id}/. Dispatch ccd-continuation with this run id. Do not read the refused output.${staleNote}${truncNote}`
   }
 }
 

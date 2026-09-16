@@ -40,6 +40,16 @@ function backupCount (paths) {
 
 // --- I1: a shape-malformed ledger is backed up, not silently destroyed ---
 
+
+// Real transcript frames: the refusal frame reports `model: "<synthetic>"`,
+// so the refusing model is the last real one named before it.
+function refusedTail (model) {
+  return [
+    JSON.stringify({ type: 'assistant', message: { model, stop_reason: 'tool_use' } }),
+    JSON.stringify({ type: 'assistant', message: { model: '<synthetic>', stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } } })
+  ].join(String.fromCharCode(10))
+}
+
 test('a ledger that parses but has a non-object areas is backed up before the fallback', () => {
   const root = project()
   const paths = writeLedgerFile(root, JSON.stringify({ version: 1, areas: [{ score: 9, kills: 4 }] }))
@@ -151,8 +161,9 @@ test('a refusal still writes a baton when the config ladder is corrupt', () => {
   writeFileSync(paths.config, JSON.stringify({ ladder: null }))
   handleStop({ agent_id: 'r1', agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl', session_id: 's2' }, {
     root,
-    readTailFn: () => '{"model":"claude-opus-4-8","stop_reason":"refusal"}',
+    readTailFn: () => refusedTail('claude-opus-4-8'),
     extractFn: () => ['src/a.c'],
+    framesExtractFn: () => ['src/a.c'],
     gitStateFn: () => ({ files: ['src/a.c'], status: '', diffstat: '', truncated: false })
   })
   const baton = JSON.parse(readFileSync(join(paths.runs, 'r1', 'baton.json'), 'utf8'))
@@ -168,8 +179,9 @@ test('a non-integer origin attempt is treated as absent so the run restarts at o
   writeFileSync(join(paths.runs, 'bad', 'origin.json'), JSON.stringify({ fromRunId: 'x', attempt: 'two' }))
   handleStop({ agent_id: 'bad', agent_type: 'ccd-continuation', agent_transcript_path: '/t.jsonl', session_id: 's3' }, {
     root,
-    readTailFn: () => '{"model":"claude-opus-4-6","stop_reason":"refusal"}',
+    readTailFn: () => refusedTail('claude-opus-4-6'),
     extractFn: () => [],
+    framesExtractFn: () => [],
     gitStateFn: () => ({ files: [], status: '', diffstat: '', truncated: false })
   })
   const baton = JSON.parse(readFileSync(join(paths.runs, 'bad', 'baton.json'), 'utf8'))
@@ -183,8 +195,9 @@ test('a negative origin attempt is also treated as absent', () => {
   writeFileSync(join(paths.runs, 'neg', 'origin.json'), JSON.stringify({ fromRunId: 'x', attempt: -5 }))
   handleStop({ agent_id: 'neg', agent_type: 'ccd-continuation', agent_transcript_path: '/t.jsonl', session_id: 's4' }, {
     root,
-    readTailFn: () => '{"model":"claude-opus-4-6","stop_reason":"refusal"}',
+    readTailFn: () => refusedTail('claude-opus-4-6'),
     extractFn: () => [],
+    framesExtractFn: () => [],
     gitStateFn: () => ({ files: [], status: '', diffstat: '', truncated: false })
   })
   assert.equal(existsSync(join(paths.runs, 'neg', 'baton.json')), true)
