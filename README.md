@@ -1,3 +1,5 @@
+[![Listed on ClaudePluginHub](https://www.claudepluginhub.com/badge/0xntpower-cyber-delegation)](https://www.claudepluginhub.com/plugins/0xntpower-cyber-delegation?ref=badge)
+
 # cyber-delegation
 
 A Claude Code plugin. When a subagent is refused by model guardrails, it captures what that agent touched and hands the work to a successor pinned to Opus 4.6.
